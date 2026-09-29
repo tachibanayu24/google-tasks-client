@@ -257,7 +257,7 @@ private extension Data {
 }
 
 /// A tiny HTTP server on 127.0.0.1 (random port) that waits for the single OAuth redirect carrying our state.
-private final class LoopbackServer: @unchecked Sendable {
+final class LoopbackServer: @unchecked Sendable {
     private let expectedState: String
     private let lock = NSLock()
     private var fd: Int32 = -1
@@ -342,28 +342,30 @@ private final class LoopbackServer: @unchecked Sendable {
                 finish(.failure(AuthError.cancelled))
                 return
             }
-            // A browser may open speculative connections that never send anything, and may close before we
-            // answer: time out reads, and don't let a write to a closed socket raise SIGPIPE.
-            var on: Int32 = 1
-            setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
-            var timeout = timeval(tv_sec: 5, tv_usec: 0)
-            setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
-
-            let params = readRequestParams(client)
-            // Only the redirect carrying our state counts; anything else (a favicon, another local page
-            // poking the port) gets a 404 and the wait goes on.
-            let handled = params?["state"] == expectedState && (params?["code"] != nil || params?["error"] != nil)
-            let body = handled
-                ? "<!doctype html><meta charset=utf-8><title>Dueday</title><body style=\"font:15px -apple-system;text-align:center;padding-top:80px\"><h2>Signed in to Dueday</h2><p>You can close this tab.</p>"
-                : "Not found"
-            let response = "HTTP/1.1 \(handled ? "200 OK" : "404 Not Found")\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: \(body.utf8.count)\r\nConnection: close\r\n\r\n\(body)"
-            _ = response.withCString { write(client, $0, strlen($0)) }
-            close(client)
-            if handled, let params {
-                finish(.success(params))
-                return
-            }
+            // Browsers open speculative connections that may never send anything: serve each one on its own,
+            // so an idle one can't hold up the real redirect.
+            DispatchQueue.global().async { [self] in handle(client) }
         }
+    }
+
+    private func handle(_ client: Int32) {
+        // Time out idle reads, and don't let a write to a socket the browser already closed raise SIGPIPE.
+        var on: Int32 = 1
+        setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
+        var timeout = timeval(tv_sec: 10, tv_usec: 0)
+        setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+
+        let params = readRequestParams(client)
+        // Only the redirect carrying our state counts; anything else (a favicon, another local page poking
+        // the port) gets a 404 and the wait goes on.
+        let handled = params?["state"] == expectedState && (params?["code"] != nil || params?["error"] != nil)
+        let body = handled
+            ? "<!doctype html><meta charset=utf-8><title>Dueday</title><body style=\"font:15px -apple-system;text-align:center;padding-top:80px\"><h2>Signed in to Dueday</h2><p>You can close this tab.</p>"
+            : "Not found"
+        let response = "HTTP/1.1 \(handled ? "200 OK" : "404 Not Found")\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: \(body.utf8.count)\r\nConnection: close\r\n\r\n\(body)"
+        _ = response.withCString { write(client, $0, strlen($0)) }
+        close(client)
+        if handled, let params { finish(.success(params)) }
     }
 
     /// Reads up to the end of the request line ("GET /?code=…&state=… HTTP/1.1") and returns its query.
