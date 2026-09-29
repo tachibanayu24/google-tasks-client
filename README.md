@@ -17,7 +17,7 @@ Google Tasks in your menu bar. Dueday counts what's due today and what's overdue
 - **A glance is enough.** The menu bar shows how many tasks are due today or overdue, across every list, with a ring that fills as you complete them <img src="docs/menubar-count.png" height="18" alt="">. When nothing is left, it turns into a party popper <img src="docs/menubar-done.png" height="18" alt="">.
 - **Today, across lists.** Click it for one view of what's overdue, what's due today and what you've already done, with the list each task belongs to.
 - **Every list, too.** Each list is a tab: add, edit, complete, reorder by dragging, nest subtasks, set dates, move tasks between lists, create and rename lists.
-- **Instant.** Edits show immediately and sync in the background, in order. Changes made on your phone show up within seconds while the panel is open and within minutes otherwise.
+- **Instant.** Edits show immediately and sync in the background, in order. Changes made on your phone show up within half a minute while the panel is open, and within five minutes in the menu bar.
 - **Liquid Glass.** A glass panel that drops from the menu bar, from crystal clear to tinted.
 - **Your own keys, no server.** Dueday talks to Google directly with an OAuth client you create. Nothing passes through anyone else.
 
@@ -66,7 +66,7 @@ Dueday lives in the menu bar (no Dock icon). It is ad-hoc signed, so build it on
 | `⌘,` | Settings |
 | `⌘Q` twice | Quit (a single press only shows a hint) |
 
-On a task: click the circle to complete it, click the title to edit it, click the row for details, notes, date and actions, and right-click for more (subtasks, move to another list, postpone to tomorrow, delete). Drag tasks to reorder them; drop one under another task's subtasks to make it a subtask.
+On a task: click the circle to complete it, click the title to edit it, click the row for details, notes, date and actions, and right-click for more (subtasks, move to another list, postpone to tomorrow, delete). Drag tasks to reorder them; drag a subtask under another task to move it there. *Make Subtask* (right-click) nests a task under the one above it.
 
 **Settings** (`⌘,`): account, an optional global shortcut, theme, opacity, text size, launch at login.
 
