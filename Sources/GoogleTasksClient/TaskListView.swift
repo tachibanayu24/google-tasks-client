@@ -145,9 +145,14 @@ struct TaskRow: View {
                     details
                 }
                 Spacer(minLength: 0)
-                // Kept while its date popover is up, so the popover keeps its anchor.
-                if (hovering || pickingDate) && !expanded && !task.isCompleted {
-                    hoverActions.transition(.opacity)
+                // Always laid out, only faded in: a row that changed size under the pointer would make the list
+                // re-tile mid-scroll and snap its elastic bounce back to the edge. Kept visible while its date
+                // popover is up, so the popover keeps its anchor.
+                if !expanded && !task.isCompleted {
+                    let shown = hovering || pickingDate
+                    hoverActions
+                        .opacity(shown ? 1 : 0)
+                        .allowsHitTesting(shown)
                 }
             }
             if store.addingSubtaskTo == store.rowID(task) {

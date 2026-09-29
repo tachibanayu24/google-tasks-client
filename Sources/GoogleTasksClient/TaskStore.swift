@@ -749,7 +749,13 @@ final class TaskStore: ObservableObject {
                 t("w2", "Review Ken’s pull request", due: day(-2), pos: 2),
                 t("w3", "Weekly report", due: day(0), done: true, pos: 3),
             ],
-            "home": [],
+            "home": [
+                "Buy groceries", "Fix the leaking tap", "Book a haircut", "Return the library books",
+                "Plan the weekend trip", "Clean the fridge", "Water the balcony plants", "Call the plumber",
+                "Replace the smoke alarm battery", "Sort the recycling", "Order a new desk lamp", "Pay the gym membership",
+                "Back up the photos", "Descale the kettle", "Wash the car", "Renew the car insurance",
+                "Tidy the garage", "Buy a birthday present for Mia",
+            ].enumerated().map { i, title in t("h\(i)", title, pos: i) },
         ]
         selectedListID = "inbox"
     }
