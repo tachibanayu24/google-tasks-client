@@ -46,6 +46,9 @@ final class GoogleAuth: ObservableObject {
     private var accessTokenExpiry = Date.distantPast
     private var refreshing: Task<String, Error>?
     private var loopback: LoopbackServer?
+    /// Bumped whenever the signed-in session changes, so a refresh that started under another session
+    /// can't install its token afterwards.
+    private var session = 0
 
     private init() {
         if let stored = Keychain.load(StoredAuth.self) {
@@ -70,19 +73,21 @@ final class GoogleAuth: ObservableObject {
                                     clientSecret: newClient.clientSecret.trimmingCharacters(in: .whitespacesAndNewlines))
         guard !newClient.clientID.isEmpty, !newClient.clientSecret.isEmpty else { throw AuthError.notConfigured }
         cancelSignIn()
-        isSigningIn = true
-        defer {
-            isSigningIn = false
-            loopback?.stop()
-            loopback = nil
-        }
-
         let verifier = Self.randomURLSafe(bytes: 48)
         let challenge = Data(SHA256.hash(data: Data(verifier.utf8))).base64URLEncoded
         let state = Self.randomURLSafe(bytes: 16)
 
-        let server = LoopbackServer()
+        let server = LoopbackServer(expectedState: state)
         loopback = server
+        isSigningIn = true
+        defer {
+            server.stop()
+            // A newer attempt may have replaced this one meanwhile; leave that one alone.
+            if loopback === server {
+                loopback = nil
+                isSigningIn = false
+            }
+        }
         let port = try server.start()
         let redirectURI = "http://127.0.0.1:\(port)"
 
@@ -102,7 +107,7 @@ final class GoogleAuth: ObservableObject {
 
         let params = try await server.waitForRedirect()
         if let error = params["error"] { throw AuthError.denied(error) }
-        guard params["state"] == state, let code = params["code"] else { throw AuthError.server("Unexpected redirect from Google.") }
+        guard let code = params["code"] else { throw AuthError.server("Unexpected redirect from Google.") }
 
         let token = try await Self.tokenRequest([
             "grant_type": "authorization_code",
@@ -113,6 +118,9 @@ final class GoogleAuth: ObservableObject {
             "client_secret": newClient.clientSecret,
         ])
         guard let refresh = token.refresh_token else { throw AuthError.server("Google returned no refresh token.") }
+        refreshing?.cancel()
+        refreshing = nil
+        session += 1
         client = newClient
         refreshToken = refresh
         accessToken = token.access_token
@@ -145,6 +153,7 @@ final class GoogleAuth: ObservableObject {
     }
 
     private func dropSession() {
+        session += 1
         refreshing?.cancel()
         refreshing = nil
         refreshToken = nil
@@ -176,14 +185,17 @@ final class GoogleAuth: ObservableObject {
             }
         }
         refreshing = task
-        defer { refreshing = nil }
+        let started = session
+        defer { if session == started { refreshing = nil } }
         do {
             let token = try await task.value
+            // Signed out or into another account meanwhile: this token belongs to a session that is gone.
+            guard session == started else { throw AuthError.notSignedIn }
             accessToken = token
             accessTokenExpiry = Date().addingTimeInterval(3500)
             return token
         } catch AuthError.notSignedIn {
-            dropSession()
+            if session == started { dropSession() }
             throw AuthError.notSignedIn
         }
     }
@@ -244,12 +256,17 @@ private extension Data {
     }
 }
 
-/// A tiny HTTP server on 127.0.0.1 (random port) that waits for the single OAuth redirect.
+/// A tiny HTTP server on 127.0.0.1 (random port) that waits for the single OAuth redirect carrying our state.
 private final class LoopbackServer: @unchecked Sendable {
+    private let expectedState: String
     private let lock = NSLock()
     private var fd: Int32 = -1
     private var continuation: CheckedContinuation<[String: String], Error>?
     private var result: Result<[String: String], Error>?
+
+    init(expectedState: String) {
+        self.expectedState = expectedState
+    }
 
     func start() throws -> UInt16 {
         let sock = socket(AF_INET, SOCK_STREAM, 0)
@@ -262,14 +279,14 @@ private final class LoopbackServer: @unchecked Sendable {
         var len = socklen_t(MemoryLayout<sockaddr_in>.size)
         let ok = withUnsafeMutablePointer(to: &addr) { ptr in
             ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
-                bind(sock, sa, len) == 0 && listen(sock, 4) == 0 && getsockname(sock, sa, &len) == 0
+                bind(sock, sa, len) == 0 && listen(sock, 8) == 0 && getsockname(sock, sa, &len) == 0
             }
         }
         guard ok else {
             close(sock)
             throw AuthError.server("Couldn’t open a local port for sign-in.")
         }
-        fd = sock
+        lock.withLock { fd = sock }
         let port = UInt16(bigEndian: addr.sin_port)
         Thread.detachNewThread { [self] in acceptLoop(sock) }
         return port
@@ -291,16 +308,18 @@ private final class LoopbackServer: @unchecked Sendable {
     func cancel() { finish(.failure(AuthError.cancelled)) }
 
     func stop() {
-        lock.lock()
-        let sock = fd
-        fd = -1
-        lock.unlock()
+        let sock = lock.withLock {
+            let sock = fd
+            fd = -1
+            return sock
+        }
         if sock >= 0 {
             shutdown(sock, SHUT_RDWR)
             close(sock)
         }
     }
 
+    /// Resumes the waiter exactly once.
     private func finish(_ r: Result<[String: String], Error>) {
         lock.lock()
         guard result == nil else {
@@ -318,26 +337,50 @@ private final class LoopbackServer: @unchecked Sendable {
     private func acceptLoop(_ sock: Int32) {
         while true {
             let client = accept(sock, nil, nil)
-            guard client >= 0 else { return }  // closed by stop()
-            var buffer = [UInt8](repeating: 0, count: 8192)
-            let n = read(client, &buffer, buffer.count)
-            let request = n > 0 ? String(decoding: buffer[0..<n], as: UTF8.self) : ""
-            // "GET /?code=…&state=… HTTP/1.1"
-            let target = request.split(separator: " ").dropFirst().first.map(String.init) ?? ""
-            let items = URLComponents(string: "http://localhost" + target)?.queryItems ?? []
-            var params: [String: String] = [:]
-            for item in items { params[item.name] = item.value ?? "" }
-            let handled = params["code"] != nil || params["error"] != nil
+            guard client >= 0 else {
+                // Closed by stop(), or broken: either way nobody will be redirected here any more.
+                finish(.failure(AuthError.cancelled))
+                return
+            }
+            // A browser may open speculative connections that never send anything, and may close before we
+            // answer: time out reads, and don't let a write to a closed socket raise SIGPIPE.
+            var on: Int32 = 1
+            setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
+            var timeout = timeval(tv_sec: 5, tv_usec: 0)
+            setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+
+            let params = readRequestParams(client)
+            // Only the redirect carrying our state counts; anything else (a favicon, another local page
+            // poking the port) gets a 404 and the wait goes on.
+            let handled = params?["state"] == expectedState && (params?["code"] != nil || params?["error"] != nil)
             let body = handled
                 ? "<!doctype html><meta charset=utf-8><title>Dueday</title><body style=\"font:15px -apple-system;text-align:center;padding-top:80px\"><h2>Signed in to Dueday</h2><p>You can close this tab.</p>"
                 : "Not found"
             let response = "HTTP/1.1 \(handled ? "200 OK" : "404 Not Found")\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: \(body.utf8.count)\r\nConnection: close\r\n\r\n\(body)"
             _ = response.withCString { write(client, $0, strlen($0)) }
             close(client)
-            if handled {
+            if handled, let params {
                 finish(.success(params))
                 return
             }
         }
+    }
+
+    /// Reads up to the end of the request line ("GET /?code=…&state=… HTTP/1.1") and returns its query.
+    private func readRequestParams(_ client: Int32) -> [String: String]? {
+        var data = [UInt8]()
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while data.count < 16_384, !data.contains(0x0A) {
+            let n = read(client, &buffer, buffer.count)
+            guard n > 0 else { break }
+            data += buffer[0..<n]
+        }
+        let line = String(decoding: data.prefix { $0 != 0x0D && $0 != 0x0A }, as: UTF8.self)
+        let parts = line.split(separator: " ")
+        guard parts.count >= 2, parts[0] == "GET",
+              let items = URLComponents(string: "http://localhost" + parts[1])?.queryItems else { return nil }
+        var params: [String: String] = [:]
+        for item in items { params[item.name] = item.value ?? "" }
+        return params
     }
 }
