@@ -156,8 +156,6 @@ The menu bar counts open tasks **with a date of today or earlier**, in all lists
 
 The menu bar count is refreshed every 5 minutes, after waking from sleep and at midnight, and every 30 seconds while the panel is open.
 
-To keep the glass looking the same whether or not the panel has focus, the panel answers a few private AppKit appearance hooks. That keeps it out of the Mac App Store, and a future macOS update could change how they behave.
-
 `Vendor/` holds [KeyboardShortcuts](https://github.com/sindresorhus/KeyboardShortcuts), patched to compile its English strings in. That way the app needs no SwiftPM resource bundle, which SwiftPM's generated lookup can't find inside a signed app.
 
 ## Development
@@ -187,5 +185,3 @@ Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md).
 ## License
 
 [MIT](LICENSE). The vendored [KeyboardShortcuts](Vendor/KeyboardShortcuts/license) (MIT) keeps its own license.
-
-This is an independent project, not affiliated with or endorsed by Google. Google Tasks is a trademark of Google LLC.
