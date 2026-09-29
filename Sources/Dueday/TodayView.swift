@@ -153,6 +153,7 @@ private struct Calm: View {
 struct ConfettiView: View {
     let trigger: Int
     @State private var start: Date?
+    @State private var burstID = UUID()
     @State private var pieces: [Piece] = []
     private let duration: TimeInterval = 2.4
 
@@ -192,9 +193,11 @@ struct ConfettiView: View {
                   color: colors.randomElement()!, phase: .random(in: 0...(2 * .pi)))
         }
         start = Date()
-        let token = trigger
+        let id = UUID()
+        burstID = id
+        // Stop the timeline afterwards, unless another burst has started meanwhile.
         DispatchQueue.main.asyncAfter(deadline: .now() + duration) {
-            if token == trigger { start = nil }
+            if burstID == id { start = nil }
         }
     }
 }

@@ -15,7 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
-        store = TaskStore(auth: auth)
+        store = TaskStore(auth: auth, api: TasksAPI(auth: auth))
         panel = PanelController(store: store, auth: auth, menu: buildStatusMenu())
 
         buildMainMenu()
@@ -23,8 +23,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         installDevHooks()
         startBackgroundSync()
 
-        // First run: open the panel so the setup steps are right there.
-        if !auth.isSignedIn && !AppInfo.isDevBuild { panel.show() }
+        // First run: open the panel so the setup steps are right there (once the status item is laid out).
+        if !auth.isSignedIn && !AppInfo.isDevBuild {
+            DispatchQueue.main.async { self.panel.show() }
+        }
     }
 
     /// The menu bar count must stay right while the panel is closed: re-sync every few minutes, after
@@ -208,31 +210,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     @objc private func decreaseText() { prefs.textSize = max(Preferences.textSizeRange.lowerBound, prefs.textSize - 1) }
     @objc private func resetText() { prefs.textSize = Preferences.defaultTextSize }
 
+    /// Settings is an ordinary window: the panel steps aside and the app activates for it, so it can't end
+    /// up behind the panel or floating over other apps.
     @objc func openSettings() {
+        panel.hide()
         if settingsWindow == nil {
-            // Like the panel, a non-activating panel: it takes the keyboard without making the app active.
-            let window = NSPanel(contentRect: .zero, styleMask: [.titled, .closable, .nonactivatingPanel],
-                                 backing: .buffered, defer: false)
+            let window = NSWindow(contentRect: .zero, styleMask: [.titled, .closable], backing: .buffered, defer: false)
             let host = NSHostingController(rootView: SettingsView(auth: auth))
             host.sizingOptions = [.preferredContentSize]
             window.contentViewController = host
             window.setContentSize(host.view.fittingSize)
             window.title = "Dueday Settings"
-            window.level = .floating
-            window.hidesOnDeactivate = false
-            window.becomesKeyOnlyIfNeeded = false
             window.isReleasedWhenClosed = false
             window.delegate = self
             settingsWindow = window
+            window.center()
         }
-        settingsWindow?.center()
+        NSApp.activate()
         settingsWindow?.makeKeyAndOrderFront(nil)
     }
 
     func windowWillClose(_ notification: Notification) {
-        // Settings never activated the app, so the app used before still has the keyboard, unless the panel is up.
-        guard (notification.object as? NSWindow) === settingsWindow, panel.isShown else { return }
-        panel.showOrFocus()
+        // Hand the keyboard back to the app used before Settings.
+        guard (notification.object as? NSWindow) === settingsWindow, !panel.isShown else { return }
+        NSApp.hide(nil)
     }
 }
 

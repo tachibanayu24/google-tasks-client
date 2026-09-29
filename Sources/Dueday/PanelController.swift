@@ -138,6 +138,13 @@ final class PanelController: NSObject, NSWindowDelegate {
             .sink { [weak self] _ in DispatchQueue.main.async { self?.updateStatusItem() } }
             .store(in: &cancellables)
 
+        // Like a menu: switching to another app (⌘Tab, Dock, Spotlight results) closes the panel.
+        NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didActivateApplicationNotification)
+            .compactMap { $0.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication }
+            .filter { $0 != NSRunningApplication.current }
+            .sink { [weak self] _ in self?.hide() }
+            .store(in: &cancellables)
+
         prefs.$opacity.combineLatest(prefs.$theme)
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _, _ in self?.applyAppearance() }
@@ -165,8 +172,6 @@ final class PanelController: NSObject, NSWindowDelegate {
     }
 
     // MARK: Menu bar item
-
-    private var lastAllDone = false
 
     /// Today's remaining count next to a progress ring; a party popper once everything due is done.
     func updateStatusItem() {
@@ -198,17 +203,6 @@ final class PanelController: NSObject, NSWindowDelegate {
             if !today.done.isEmpty { parts.append("\(today.done.count) done") }
             button.toolTip = parts.joined(separator: " · ")
         }
-        if today.allDone && !lastAllDone { bounceStatusItem() }
-        lastAllDone = today.allDone
-    }
-
-    private func bounceStatusItem() {
-        guard let layer = statusItem.button?.layer else { return }
-        let bounce = CAKeyframeAnimation(keyPath: "transform.scale")
-        bounce.values = [1, 1.35, 0.9, 1.1, 1]
-        bounce.keyTimes = [0, 0.25, 0.5, 0.75, 1]
-        bounce.duration = 0.6
-        layer.add(bounce, forKey: "bounce")
     }
 
     @objc private func statusItemClicked(_ sender: NSStatusBarButton) {
@@ -224,8 +218,15 @@ final class PanelController: NSObject, NSWindowDelegate {
 
     // MARK: Show / hide
 
+    /// Status item clicks and the shortcut: closed → open, open but not focused → focus, focused → close.
     func toggle() {
-        isShown ? hide() : show()
+        if !isShown {
+            show()
+        } else if !panel.isKeyWindow && panel.allowsKey {
+            focus()
+        } else {
+            hide()
+        }
     }
 
     func showOrFocus() {
@@ -234,9 +235,7 @@ final class PanelController: NSObject, NSWindowDelegate {
 
     /// `takeFocus: false` only for dev previews.
     func show(takeFocus: Bool = true) {
-        guard let button = statusItem.button, let buttonWindow = button.window else { return }
-        let anchor = buttonWindow.convertToScreen(button.convert(button.bounds, to: nil))
-        let screen = buttonWindow.screen ?? NSScreen.main ?? NSScreen.screens[0]
+        let (anchor, screen) = anchorRect()
         let vf = screen.visibleFrame
         let height = min(size.height, vf.height - 16)
         let x = min(max(vf.minX + 8, anchor.midX - size.width / 2), vf.maxX - size.width - 8)
@@ -244,7 +243,9 @@ final class PanelController: NSObject, NSWindowDelegate {
 
         animationGeneration += 1
         isShown = true
+        store.isPanelOpen = true
         statusItem.button?.highlight(true)
+        if NSApp.isHidden { NSApp.unhideWithoutActivation() }
         panel.alphaValue = 0
         panel.setFrame(target.offsetBy(dx: 0, dy: 10), display: false)
         panel.orderFrontRegardless()
@@ -270,7 +271,10 @@ final class PanelController: NSObject, NSWindowDelegate {
         animationGeneration += 1
         let generation = animationGeneration
         isShown = false
+        store.isPanelOpen = false
         statusItem.button?.highlight(false)
+        // Popovers are child windows; take them down now rather than at the end of the fade.
+        panel.childWindows?.forEach { $0.orderOut(nil) }
 
         NSAnimationContext.runAnimationGroup({ ctx in
             ctx.duration = 0.18
@@ -288,6 +292,18 @@ final class PanelController: NSObject, NSWindowDelegate {
 
     private func focus() {
         panel.makeKeyAndOrderFront(nil)
+    }
+
+    /// Where the panel hangs from: the status item, or — when it has no window (hidden by the system or a
+    /// menu bar manager) — the top-right corner of the screen under the mouse.
+    private func anchorRect() -> (NSRect, NSScreen) {
+        if let button = statusItem.button, let window = button.window, let screen = window.screen {
+            return (window.convertToScreen(button.convert(button.bounds, to: nil)), screen)
+        }
+        let mouse = NSEvent.mouseLocation
+        let screen = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) } ?? NSScreen.main ?? NSScreen.screens[0]
+        let vf = screen.visibleFrame
+        return (NSRect(x: vf.maxX - size.width / 2 - 8, y: vf.maxY, width: 0, height: 0), screen)
     }
 
     /// Like a menu: a click anywhere else closes the panel. (Clicks in our own popovers and Settings are

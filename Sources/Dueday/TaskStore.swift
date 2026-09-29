@@ -1,25 +1,57 @@
 import Combine
 import Foundation
 
+/// What the store needs to know about the Google session.
+@MainActor
+protocol AuthSession: AnyObject {
+    var isSignedIn: Bool { get }
+    var signedInChanges: AnyPublisher<Bool, Never> { get }
+}
+
+extension GoogleAuth: AuthSession {
+    var signedInChanges: AnyPublisher<Bool, Never> { $isSignedIn.eraseToAnyPublisher() }
+}
+
 /// Local mirror of the user's Google Tasks. Every edit is applied here first (so the UI never waits on the
 /// network) and then sent to Google through one serial queue, so edits reach the server in the order made.
-/// Once the queue drains, the touched lists are re-fetched: the server's order and ids become the truth again.
+/// Once the queue drains, the touched lists are re-read: the server's order and ids become the truth again.
 @MainActor
 final class TaskStore: ObservableObject {
     struct Row: Identifiable, Equatable {
         let task: TaskItem
         let depth: Int
-        var id: String { task.id }
+        /// Stable across the swap from a locally created task to Google's copy of it.
+        let id: String
+    }
+
+    struct Entry: Identifiable, Equatable {
+        let listID: String
+        let task: TaskItem
+        let id: String
+    }
+
+    struct Today: Equatable {
+        var overdue: [Entry] = []
+        var dueToday: [Entry] = []
+        /// Tasks due by today that were completed today.
+        var done: [Entry] = []
+        var remaining: Int { overdue.count + dueToday.count }
+        var progress: Double { done.isEmpty ? 0 : Double(done.count) / Double(done.count + remaining) }
+        var allDone: Bool { remaining == 0 && !done.isEmpty }
     }
 
     @Published private(set) var lists: [TaskList] = []
     @Published private(set) var selectedListID: String?
     /// The "Today" tab (due today or overdue, across all lists) instead of a single list.
-    @Published private(set) var showingToday = UserDefaults.standard.object(forKey: "showingToday") as? Bool ?? true
+    @Published private(set) var showingToday: Bool
     @Published private(set) var tasks: [String: [TaskItem]] = [:]
     @Published private(set) var isSyncing = false
-    /// The task whose inline "new subtask" field is open.
+    /// Set while Google can't be reached or refuses a sync; cleared by the next successful one.
+    @Published private(set) var syncProblem: String?
+    /// Row id of the task whose inline "new subtask" field is open.
     @Published var addingSubtaskTo: String?
+    /// Whether the panel is on screen (set by the panel; views reset transient state when it closes).
+    @Published var isPanelOpen = false
     /// Dev builds only: sample data, edits stay local.
     @Published private(set) var isDemo = false
 
@@ -28,25 +60,35 @@ final class TaskStore: ObservableObject {
     /// Asks the view to put the cursor in the "Add a task" field.
     let focusAddField = PassthroughSubject<Void, Never>()
 
-    private let auth: GoogleAuth
-    private let api: TasksAPI
+    private let auth: AuthSession
+    private let api: TasksService
+    private let defaults: UserDefaults
+    private let cacheURL: URL?
+
+    /// Bumped on sign-out: work that started for the previous account is dropped when it lands.
+    private var session = 0
     private var writeChain: Task<Void, Never>?
     private var pendingWrites = 0
+    private var failedWrites: [Error] = []
     /// Bumped by every local change: a fetch that started before one is stale and gets dropped.
     private var editGeneration = 0
     /// Local placeholder id → id Google assigned (tasks and lists created here).
     private var aliases: [String: String] = [:]
+    /// Google's id → the placeholder the UI has known the task by.
+    private var rowIDs: [String: String] = [:]
     private var touchedLists = Set<String>()
-    private var loadedLists = Set<String>()
     private var reconcileWork: DispatchWorkItem?
     private var saveWork: DispatchWorkItem?
     private var cancellables = Set<AnyCancellable>()
 
-    init(auth: GoogleAuth) {
+    init(auth: AuthSession, api: TasksService, defaults: UserDefaults = .standard, cacheURL: URL? = TaskStore.defaultCacheURL) {
         self.auth = auth
-        api = TasksAPI(auth: auth)
+        self.api = api
+        self.defaults = defaults
+        self.cacheURL = cacheURL
+        showingToday = defaults.object(forKey: "showingToday") as? Bool ?? true
         loadCache()
-        auth.$isSignedIn
+        auth.signedInChanges
             .removeDuplicates()
             .dropFirst()
             .sink { [weak self] signedIn in
@@ -64,9 +106,13 @@ final class TaskStore: ObservableObject {
 
     var selectedList: TaskList? { lists.first { $0.id == selectedListID } }
 
+    func listTitle(_ id: String) -> String { lists.first { $0.id == key(id) }?.title ?? "" }
+
+    func rowID(_ task: TaskItem) -> String { rowIDs[task.id] ?? task.id }
+
     /// Open tasks in display order: each top-level task followed by its open subtasks.
     func openRows(in listID: String) -> [Row] {
-        let open = (tasks[listID] ?? []).enumerated().filter { !$0.element.isCompleted }
+        let open = (tasks[key(listID)] ?? []).enumerated().filter { !$0.element.isCompleted }
         let ids = Set(open.map(\.element.id))
         func sorted(_ items: [(offset: Int, element: TaskItem)]) -> [TaskItem] {
             items.sorted { a, b in
@@ -75,43 +121,29 @@ final class TaskStore: ObservableObject {
             }
             .map(\.element)
         }
-        // A subtask whose parent is completed shows up at the top level instead of disappearing.
+        // A subtask whose parent is completed shows at the top level ("orphan") instead of disappearing.
         let tops = sorted(open.filter { $0.element.parent.map { !ids.contains($0) } ?? true })
         let children = Dictionary(grouping: open.filter { $0.element.parent.map(ids.contains) ?? false }) { $0.element.parent! }
         return tops.flatMap { top in
-            [Row(task: top, depth: 0)] + sorted(children[top.id] ?? []).map { Row(task: $0, depth: 1) }
+            [Row(task: top, depth: 0, id: rowID(top))]
+                + sorted(children[top.id] ?? []).map { Row(task: $0, depth: 1, id: rowID($0)) }
         }
     }
 
     func completedTasks(in listID: String) -> [TaskItem] {
-        (tasks[listID] ?? []).filter(\.isCompleted).sorted { ($0.completed ?? "") > ($1.completed ?? "") }
-    }
-
-    struct Entry: Identifiable, Equatable {
-        let listID: String
-        let task: TaskItem
-        var id: String { task.id }
-    }
-
-    struct Today: Equatable {
-        var overdue: [Entry] = []
-        var dueToday: [Entry] = []
-        /// Tasks due by today that were completed today.
-        var done: [Entry] = []
-        var remaining: Int { overdue.count + dueToday.count }
-        var progress: Double { done.isEmpty && remaining == 0 ? 0 : Double(done.count) / Double(done.count + remaining) }
-        var allDone: Bool { remaining == 0 && !done.isEmpty }
+        (tasks[key(listID)] ?? []).filter(\.isCompleted).sorted { ($0.completed ?? "") > ($1.completed ?? "") }
     }
 
     /// What the menu bar counts: open tasks due today or earlier, in every list.
     var today: Today {
         let cal = Calendar.current
         let start = cal.startOfDay(for: Date())
+        let tomorrow = cal.date(byAdding: .day, value: 1, to: start)!
         var result = Today()
         for list in lists {
             for task in tasks[list.id] ?? [] {
-                guard let due = task.dueDate, due < cal.date(byAdding: .day, value: 1, to: start)! else { continue }
-                let entry = Entry(listID: list.id, task: task)
+                guard let due = task.dueDate, due < tomorrow else { continue }
+                let entry = Entry(listID: list.id, task: task, id: rowID(task))
                 if task.isCompleted {
                     if let done = task.completedDate, done >= start { result.done.append(entry) }
                 } else if due < start {
@@ -126,61 +158,61 @@ final class TaskStore: ObservableObject {
         return result
     }
 
-    func listTitle(_ id: String) -> String { lists.first { $0.id == id }?.title ?? "" }
-
-    func hasChildren(_ task: TaskItem, in listID: String) -> Bool {
-        (tasks[listID] ?? []).contains { $0.parent == task.id && !$0.isCompleted }
-    }
-
     // MARK: Sync
 
+    /// Re-reads every list (the menu bar counts across all of them).
     func refresh() async {
         guard !isDemo, auth.isSignedIn, !isSyncing else { return }
         isSyncing = true
         defer { isSyncing = false }
+        let started = session
         do {
             let generation = editGeneration
             let fetched = try await api.lists()
+            guard session == started else { return }
             if generation == editGeneration, pendingWrites == 0 {
-                lists = fetched
-                for id in loadedLists where !fetched.contains(where: { $0.id == id }) {
-                    tasks[id] = nil
-                    loadedLists.remove(id)
-                }
+                applyLists(fetched)
             }
-            if selectedListID.map({ id in !lists.contains { $0.id == id } }) ?? true {
-                selectedListID = lists.first?.id
+            for list in lists where !list.id.hasPrefix("local-") {
+                try await reloadTasks(list.id)
             }
-            // The menu bar counts tasks from every list, so every list is kept loaded.
-            if let id = selectedListID { try await reloadTasks(id) }
-            for list in lists where list.id != selectedListID { try await reloadTasks(list.id) }
+            syncProblem = nil
             scheduleSave()
         } catch {
-            report(error)
+            guard session == started else { return }
+            reportSyncFailure(error)
         }
     }
 
+    private func applyLists(_ fetched: [TaskList]) {
+        lists = fetched
+        for id in tasks.keys where !fetched.contains(where: { $0.id == id }) { tasks[id] = nil }
+        if selectedListID.map({ id in !lists.contains { $0.id == id } }) ?? true {
+            selectedListID = lists.first?.id
+        }
+    }
+
+    /// Replaces a list's tasks with Google's, unless a local edit happened meanwhile (then the list is left
+    /// for the reconcile that follows the write queue).
     private func reloadTasks(_ listID: String) async throws {
-        guard !listID.hasPrefix("local-") else { return }
+        let started = session
         let generation = editGeneration
         let fetched = try await api.tasks(in: listID)
-        // Edits made meanwhile would be overwritten; the queue re-fetches once it has drained.
-        guard generation == editGeneration, pendingWrites == 0 else { return }
+        guard session == started else { return }
+        guard generation == editGeneration, pendingWrites == 0 else {
+            touchedLists.insert(listID)
+            return
+        }
         tasks[listID] = fetched.filter { $0.deleted != true }
-        loadedLists.insert(listID)
     }
 
     func select(listID: String) {
+        let listID = key(listID)
         guard lists.contains(where: { $0.id == listID }) else { return }
         addingSubtaskTo = nil
         selectedListID = listID
         setShowingToday(false)
-        guard !isDemo else { return }
-        UserDefaults.standard.set(listID, forKey: "selectedList")
-        Task {
-            do { try await reloadTasks(resolve(listID)) } catch { report(error) }
-            scheduleSave()
-        }
+        defaults.set(listID, forKey: "selectedList")
     }
 
     func selectToday() {
@@ -190,7 +222,7 @@ final class TaskStore: ObservableObject {
 
     private func setShowingToday(_ value: Bool) {
         showingToday = value
-        UserDefaults.standard.set(value, forKey: "showingToday")
+        defaults.set(value, forKey: "showingToday")
     }
 
     /// Tabs are Today followed by the lists; -1 stands for Today.
@@ -208,39 +240,48 @@ final class TaskStore: ObservableObject {
     }
 
     private func resetAfterSignOut() {
+        session += 1
         writeChain?.cancel()
+        reconcileWork?.cancel()
         lists = []
         tasks = [:]
         selectedListID = nil
-        loadedLists = []
         aliases = [:]
-        try? FileManager.default.removeItem(at: Self.cacheURL)
+        rowIDs = [:]
+        touchedLists = []
+        failedWrites = []
+        syncProblem = nil
+        if let cacheURL { try? FileManager.default.removeItem(at: cacheURL) }
     }
 
     // MARK: Task edits
 
-    /// Adds to `listID`, or from the Today tab to the first list with today's date.
+    /// Adds to `listID` (default: the selected list). New top-level tasks go first, as in Google Tasks;
+    /// new subtasks go last under their parent.
     func addTask(title: String, parent: TaskItem? = nil, in listID: String? = nil, dueToday: Bool = false) {
         let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !title.isEmpty, let listID = listID ?? selectedListID ?? lists.first?.id else { return }
+        guard !title.isEmpty, let listID = (listID ?? selectedListID ?? lists.first?.id).map(key) else { return }
+        let parent = parent.map { current($0, in: listID) }
         let due = dueToday ? TaskItem.dueString(for: Date()) : nil
+        let previous = parent.flatMap { p in openRows(in: listID).last { $0.task.parent == p.id }?.task }
         let localID = "local-" + UUID().uuidString
-        // New top-level tasks go first (as in Google Tasks); new subtasks go last under their parent.
-        let previous = parent.flatMap { p in openRows(in: listID).last { $0.task.parent == p.id }?.task.id }
         var item = TaskItem(id: localID, title: title, status: "needsAction", due: due, parent: parent?.id)
         item.position = parent == nil ? "" : "~"
         change(listID) { $0.insert(item, at: 0) }
         var fields: [String: Any] = ["title": title]
         if let due { fields["due"] = due }
         enqueue(listID) { [self] in
-            let created = try await api.insertTask(in: resolve(listID), fields: fields,
-                                                   parent: parent.map { resolve($0.id) },
-                                                   previous: previous.map(resolve))
+            let created = try await api.insertTask(in: remote(listID), fields: fields,
+                                                   parent: try parent.map { try remote($0.id) },
+                                                   previous: try previous.map { try remote($0.id) })
             aliases[localID] = created.id
+            rowIDs[created.id] = localID
         }
     }
 
     func setCompleted(_ task: TaskItem, _ completed: Bool, in listID: String) {
+        let listID = key(listID)
+        let task = current(task, in: listID)
         // Completing a task completes its open subtasks too, like Google Tasks does.
         let children = completed ? (tasks[listID] ?? []).filter { $0.parent == task.id && !$0.isCompleted } : []
         let affected = [task.id] + children.map(\.id)
@@ -254,51 +295,62 @@ final class TaskStore: ObservableObject {
         let fields: [String: Any] = completed ? ["status": "completed"] : ["status": "needsAction", "completed": NSNull()]
         enqueue(listID) { [self] in
             for id in affected {
-                _ = try await api.patchTask(in: resolve(listID), id: resolve(id), fields: fields)
+                _ = try await api.patchTask(in: remote(listID), id: remote(id), fields: fields)
             }
         }
     }
 
     func rename(_ task: TaskItem, to title: String, in listID: String) {
+        let task = current(task, in: key(listID))
         guard title != (task.title ?? "") else { return }
         update(task, in: listID, fields: ["title": title]) { $0.title = title }
     }
 
     func setNotes(_ task: TaskItem, _ notes: String, in listID: String) {
+        let task = current(task, in: key(listID))
         guard notes != (task.notes ?? "") else { return }
         update(task, in: listID, fields: ["notes": notes.isEmpty ? NSNull() : notes]) { $0.notes = notes.isEmpty ? nil : notes }
     }
 
     func setDue(_ task: TaskItem, _ date: Date?, in listID: String) {
+        let task = current(task, in: key(listID))
         let due = date.map(TaskItem.dueString)
         guard due != task.due else { return }
         update(task, in: listID, fields: ["due": due ?? NSNull()]) { $0.due = due }
     }
 
     private func update(_ task: TaskItem, in listID: String, fields: [String: Any], _ apply: @escaping (inout TaskItem) -> Void) {
+        let listID = key(listID)
         change(listID) { items in
             if let i = items.firstIndex(where: { $0.id == task.id }) { apply(&items[i]) }
         }
         enqueue(listID) { [self] in
-            _ = try await api.patchTask(in: resolve(listID), id: resolve(task.id), fields: fields)
+            _ = try await api.patchTask(in: remote(listID), id: remote(task.id), fields: fields)
         }
     }
 
     func delete(_ task: TaskItem, in listID: String) {
+        let listID = key(listID)
+        let task = current(task, in: listID)
         let children = (tasks[listID] ?? []).filter { $0.parent == task.id }.map(\.id)
         change(listID) { $0.removeAll { $0.id == task.id || children.contains($0.id) } }
         enqueue(listID) { [self] in
-            for id in children + [task.id] { try await api.deleteTask(in: resolve(listID), id: resolve(id)) }
+            for id in children + [task.id] { try await api.deleteTask(in: remote(listID), id: remote(id)) }
         }
     }
 
+    /// Deletes the selected list's completed tasks — except completed parents that still have open subtasks,
+    /// which Google could take down with them.
     func deleteCompleted() {
         guard let listID = selectedListID else { return }
-        let ids = completedTasks(in: listID).map(\.id)
+        let items = tasks[listID] ?? []
+        let ids = items.filter { task in
+            task.isCompleted && !items.contains { $0.parent == task.id && !$0.isCompleted }
+        }.map(\.id)
         guard !ids.isEmpty else { return }
         change(listID) { $0.removeAll { ids.contains($0.id) } }
         enqueue(listID) { [self] in
-            for id in ids { try await api.deleteTask(in: resolve(listID), id: resolve(id)) }
+            for id in ids { try await api.deleteTask(in: remote(listID), id: remote(id)) }
         }
         messages.send(ids.count == 1 ? "Deleted 1 completed task" : "Deleted \(ids.count) completed tasks")
     }
@@ -313,33 +365,42 @@ final class TaskStore: ObservableObject {
         guard rows.indices.contains(from) else { return }
         let moving = rows[from]
         // Rows above the drop point, without the moved task (and its subtasks).
-        let above = rows.prefix(destination).filter { $0.id != moving.id && $0.task.parent != moving.id }
+        let above = rows.prefix(destination).filter { $0.task.id != moving.task.id && $0.task.parent != moving.task.id }
+        let nestUnder = above.last.flatMap { target -> TaskItem? in
+            guard moving.depth == 1 else { return nil }
+            if target.depth == 1 { return rows.first { $0.task.id == target.task.parent }?.task }
+            return target.task.parent == nil ? target.task : nil
+        }
 
-        if moving.depth == 0 || above.isEmpty {
-            let previous = above.last.map { $0.depth == 0 ? $0.task : topLevelAncestor(of: $0.task, rows: rows) }
-            guard moving.depth != 0 || previous?.id != topLevelBefore(moving.task, rows: rows)?.id else { return }
-            place(moving.task, parent: nil, after: previous, in: listID)
+        if let parent = nestUnder {
+            let previous = above.last.flatMap { $0.depth == 1 ? $0.task : nil }
+            let current = previousSibling(of: moving.task, rows: rows)
+            guard parent.id != moving.task.parent || previous?.id != current?.id else { return }
+            place(moving.task, parent: parent, after: previous, in: listID)
         } else {
-            let target = above.last!
-            if target.depth == 0 {
-                guard !(target.task.id == moving.task.parent && isFirstChild(moving.task, rows: rows)) else { return }
-                place(moving.task, parent: target.task, after: nil, in: listID)
-            } else {
-                guard target.task.id != previousSibling(of: moving.task, rows: rows)?.id else { return }
-                let parent = rows.first { $0.id == target.task.parent }?.task
-                place(moving.task, parent: parent, after: target.task, in: listID)
-            }
+            // Among top-level tasks, only real ones can be `previous` (not subtasks shown at the top level
+            // because their parent is completed).
+            let previous = above.reversed().lazy.compactMap { row -> TaskItem? in
+                if row.depth == 1 { return rows.first { $0.task.id == row.task.parent }?.task }
+                return row.task.parent == nil ? row.task : nil
+            }.first
+            if moving.task.parent == nil, previous?.id == topLevelBefore(moving.task, rows: rows)?.id { return }
+            place(moving.task, parent: nil, after: previous, in: listID)
         }
     }
 
     func canIndent(_ task: TaskItem) -> Bool {
-        guard let listID = selectedListID, task.parent == nil else { return false }
-        return !hasChildren(task, in: listID) && topLevelBefore(task, rows: openRows(in: listID)) != nil
+        guard let listID = selectedListID else { return false }
+        let task = current(task, in: listID)
+        // Only one level of nesting: a task with any subtasks (open or done) can't become one.
+        guard task.parent == nil, !(tasks[listID] ?? []).contains(where: { $0.parent == task.id }) else { return false }
+        return topLevelBefore(task, rows: openRows(in: listID)) != nil
     }
 
     /// Makes the task a subtask of the task above it.
     func indent(_ task: TaskItem) {
         guard let listID = selectedListID, canIndent(task) else { return }
+        let task = current(task, in: listID)
         let rows = openRows(in: listID)
         guard let parent = topLevelBefore(task, rows: rows) else { return }
         let lastChild = rows.last { $0.task.parent == parent.id }?.task
@@ -348,46 +409,67 @@ final class TaskStore: ObservableObject {
 
     /// Lifts a subtask to the top level, right after its parent.
     func outdent(_ task: TaskItem) {
-        guard let listID = selectedListID, let parentID = task.parent,
-              let parent = (tasks[listID] ?? []).first(where: { $0.id == parentID }) else { return }
-        place(task, parent: nil, after: parent, in: listID)
+        guard let listID = selectedListID else { return }
+        let task = current(task, in: listID)
+        guard let parentID = task.parent, let parent = (tasks[listID] ?? []).first(where: { $0.id == parentID }) else { return }
+        // A completed parent isn't among the open rows; place it after the nearest real top-level task instead.
+        let rows = openRows(in: listID)
+        let after = rows.contains { $0.task.id == parent.id } ? parent : topLevelBefore(task, rows: rows)
+        place(task, parent: nil, after: after, in: listID)
     }
 
+    /// Moves a task (and its subtasks) to the top of another list.
     func moveToList(_ task: TaskItem, from listID: String, to destination: String) {
+        let listID = key(listID), destination = key(destination)
         guard destination != listID else { return }
+        let task = current(task, in: listID)
         let children = (tasks[listID] ?? []).filter { $0.parent == task.id }
+            .sorted { ($0.position ?? "") < ($1.position ?? "") }
         change(listID) { $0.removeAll { $0.id == task.id || $0.parent == task.id } }
-        if loadedLists.contains(destination) {
-            change(destination) { items in
-                var moved = task
-                moved.parent = nil
-                moved.position = ""
-                items.insert(moved, at: 0)
-                items += children
+        change(destination) { items in
+            var moved = task
+            moved.parent = nil
+            moved.position = ""
+            // Completed tasks can't be nested at Google; they arrive at the top level.
+            items.insert(moved, at: 0)
+            items += children.map { child in
+                var c = child
+                if c.isCompleted { c.parent = nil }
+                return c
             }
         }
         touchedLists.insert(destination)
         enqueue(listID) { [self] in
-            let dest = resolve(destination)
-            let moved = try await api.moveTask(in: resolve(listID), id: resolve(task.id), parent: nil, previous: nil, toList: dest)
+            let source = try remote(listID), dest = try remote(destination)
+            let moved = try await api.moveTask(in: source, id: remote(task.id), parent: nil, previous: nil, toList: dest)
+            // Whether Google carries subtasks along isn't documented: move whichever are still behind.
+            let left = Set(try await api.tasks(in: source).map(\.id))
             var previous: String?
+            var failure: Error?
             for child in children {
-                let c = try await api.moveTask(in: resolve(listID), id: resolve(child.id), parent: moved.id,
-                                               previous: previous, toList: dest)
-                previous = c.id
+                let id = try remote(child.id)
+                guard left.contains(id) else { continue }
+                do {
+                    if child.isCompleted {
+                        _ = try await api.moveTask(in: source, id: id, parent: nil, previous: nil, toList: dest)
+                    } else {
+                        previous = try await api.moveTask(in: source, id: id, parent: moved.id, previous: previous, toList: dest).id
+                    }
+                } catch {
+                    failure = failure ?? error
+                }
             }
+            if let failure { throw failure }
         }
-        let name = lists.first { $0.id == destination }?.title ?? "list"
-        messages.send("Moved to \(name)")
+        messages.send("Moved to \(listTitle(destination))")
     }
 
     private func place(_ task: TaskItem, parent: TaskItem?, after previous: TaskItem?, in listID: String) {
         // Mirror the new order locally by renumbering the new siblings; the server assigns real positions.
         let rows = openRows(in: listID)
-        var siblings = rows.map(\.task).filter { $0.parent == parent?.id && $0.id != task.id }
-        if parent == nil {
-            siblings = rows.filter { $0.depth == 0 && $0.id != task.id }.map(\.task)
-        }
+        var siblings = parent == nil
+            ? rows.filter { $0.depth == 0 && $0.task.parent == nil && $0.task.id != task.id }.map(\.task)
+            : rows.map(\.task).filter { $0.parent == parent?.id && $0.id != task.id }
         let insertAt = previous.flatMap { p in siblings.firstIndex { $0.id == p.id }.map { $0 + 1 } } ?? 0
         siblings.insert(task, at: insertAt)
         let positions = Dictionary(uniqueKeysWithValues: siblings.enumerated().map { ($1.id, String(format: "%020d", $0 * 1000)) })
@@ -398,29 +480,21 @@ final class TaskStore: ObservableObject {
             }
         }
         enqueue(listID) { [self] in
-            _ = try await api.moveTask(in: resolve(listID), id: resolve(task.id), parent: parent.map { resolve($0.id) },
-                                       previous: previous.map { resolve($0.id) })
+            _ = try await api.moveTask(in: remote(listID), id: remote(task.id), parent: try parent.map { try remote($0.id) },
+                                       previous: try previous.map { try remote($0.id) }, toList: nil)
         }
     }
 
-    private func topLevelAncestor(of task: TaskItem, rows: [Row]) -> TaskItem {
-        rows.first { $0.id == task.parent && $0.depth == 0 }?.task ?? task
-    }
-
+    /// The real top-level task above this one, if any.
     private func topLevelBefore(_ task: TaskItem, rows: [Row]) -> TaskItem? {
-        let tops = rows.filter { $0.depth == 0 }
-        guard let i = tops.firstIndex(where: { $0.id == task.id }), i > 0 else { return nil }
-        return tops[i - 1].task
+        guard let index = rows.firstIndex(where: { $0.task.id == task.id }) else { return nil }
+        return rows[..<index].last { $0.depth == 0 && $0.task.parent == nil }?.task
     }
 
     private func previousSibling(of task: TaskItem, rows: [Row]) -> TaskItem? {
         let siblings = rows.filter { $0.task.parent == task.parent && $0.depth == 1 }
-        guard let i = siblings.firstIndex(where: { $0.id == task.id }), i > 0 else { return nil }
+        guard let i = siblings.firstIndex(where: { $0.task.id == task.id }), i > 0 else { return nil }
         return siblings[i - 1].task
-    }
-
-    private func isFirstChild(_ task: TaskItem, rows: [Row]) -> Bool {
-        rows.first { $0.task.parent == task.parent && $0.depth == 1 }?.id == task.id
     }
 
     // MARK: List edits
@@ -430,44 +504,71 @@ final class TaskStore: ObservableObject {
         guard !title.isEmpty else { return }
         let localID = "local-" + UUID().uuidString
         lists.append(TaskList(id: localID, title: title))
-        tasks[localID] = []
-        loadedLists.insert(localID)
+        change(localID) { _ in }
         select(listID: localID)
-        editGeneration += 1
         enqueue(nil) { [self] in
             let created = try await api.createList(title: title)
-            aliases[localID] = created.id
+            adoptList(localID, as: created.id)
         }
+    }
+
+    /// Google created the list: switch everything over to its real id, so later edits and reloads use it.
+    private func adoptList(_ localID: String, as realID: String) {
+        aliases[localID] = realID
+        if let i = lists.firstIndex(where: { $0.id == localID }) { lists[i].id = realID }
+        tasks[realID] = tasks.removeValue(forKey: localID) ?? []
+        if selectedListID == localID { selectedListID = realID }
+        if touchedLists.remove(localID) != nil { touchedLists.insert(realID) }
     }
 
     func renameList(_ list: TaskList, to title: String) {
         let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !title.isEmpty, title != list.title, let i = lists.firstIndex(where: { $0.id == list.id }) else { return }
+        let id = key(list.id)
+        guard !title.isEmpty, let i = lists.firstIndex(where: { $0.id == id }), title != lists[i].title else { return }
         lists[i].title = title
         editGeneration += 1
-        enqueue(nil) { [self] in try await api.renameList(resolve(list.id), title: title) }
+        enqueue(nil) { [self] in try await api.renameList(remote(id), title: title) }
     }
 
     func deleteList(_ list: TaskList) {
-        guard lists.count > 1, let i = lists.firstIndex(where: { $0.id == list.id }) else {
+        let id = key(list.id)
+        guard lists.count > 1, let i = lists.firstIndex(where: { $0.id == id }) else {
             messages.send("Can’t delete the only list")
             return
         }
         lists.remove(at: i)
-        tasks[list.id] = nil
-        loadedLists.remove(list.id)
-        if selectedListID == list.id {
+        tasks[id] = nil
+        if selectedListID == id {
             let neighbor = lists[max(0, i - 1)].id
             if showingToday { selectedListID = neighbor } else { select(listID: neighbor) }
         }
         editGeneration += 1
-        enqueue(nil) { [self] in try await api.deleteList(resolve(list.id)) }
+        enqueue(nil) { [self] in try await api.deleteList(remote(id)) }
         messages.send("Deleted “\(list.title)”")
     }
 
     // MARK: Plumbing
 
+    /// Thrown for an edit whose task or list never made it to Google (its creation failed): nothing to send.
+    private struct NotCreated: Error {}
+
     private func resolve(_ id: String) -> String { aliases[id] ?? id }
+
+    /// The key a list is stored under right now (a list created here switches to its real id).
+    private func key(_ listID: String) -> String { resolve(listID) }
+
+    /// The id Google knows, for use inside queued writes.
+    private func remote(_ id: String) throws -> String {
+        let id = resolve(id)
+        guard !id.hasPrefix("local-") else { throw NotCreated() }
+        return id
+    }
+
+    /// The store's current copy of a task the UI handed back (it may still hold the placeholder version).
+    private func current(_ task: TaskItem, in listID: String) -> TaskItem {
+        let real = resolve(task.id)
+        return tasks[listID]?.first { $0.id == task.id || $0.id == real } ?? task
+    }
 
     private func change(_ listID: String, _ body: (inout [TaskItem]) -> Void) {
         var items = tasks[listID] ?? []
@@ -482,19 +583,35 @@ final class TaskStore: ObservableObject {
         if let listID { touchedLists.insert(listID) }
         reconcileWork?.cancel()
         let previous = writeChain
+        let started = session
         writeChain = Task { [weak self] in
             await previous?.value
-            do {
-                try await op()
-            } catch is CancellationError {
-            } catch {
-                self?.report(error)
-            }
             guard let self else { return }
+            if self.session == started {
+                do {
+                    try await op()
+                } catch {
+                    if self.session == started, !Self.isSilent(error) { self.failedWrites.append(error) }
+                }
+            }
             self.pendingWrites -= 1
-            if self.pendingWrites == 0 { self.scheduleReconcile() }
+            if self.pendingWrites == 0, self.session == started { self.writesDrained() }
         }
         scheduleSave()
+    }
+
+    private static func isSilent(_ error: Error) -> Bool {
+        error is CancellationError || error is NotCreated || (error as? URLError)?.code == .cancelled
+    }
+
+    private func writesDrained() {
+        if let first = failedWrites.first {
+            // One message per burst: offline, ten queued edits would otherwise be ten toasts.
+            let more = failedWrites.count - 1
+            messages.send(Self.describe(first) + (more > 0 ? " (\(more + 1) changes not saved)" : ""))
+            failedWrites = []
+        }
+        scheduleReconcile()
     }
 
     /// After the queue drains, take the server's word for everything touched.
@@ -506,22 +623,26 @@ final class TaskStore: ObservableObject {
             var touched = self.touchedLists
             if let selected = self.selectedListID { touched.insert(selected) }
             self.touchedLists = []
+            let started = self.session
             Task {
                 do {
                     let generation = self.editGeneration
                     let fetched = try await self.api.lists()
-                    if generation == self.editGeneration, self.pendingWrites == 0 {
-                        // Lists created here now have real ids.
-                        if let selected = self.selectedListID, let real = self.aliases[selected] { self.selectedListID = real }
-                        self.lists = fetched
+                    guard self.session == started else { return }
+                    guard generation == self.editGeneration, self.pendingWrites == 0 else {
+                        // Edited meanwhile: that edit's own drain reconciles these too.
+                        self.touchedLists.formUnion(touched)
+                        return
                     }
-                    for id in Set(touched.map(self.resolve)) where id == self.selectedListID || self.loadedLists.contains(id) {
-                        if !fetched.contains(where: { $0.id == id }) { continue }
+                    self.applyLists(fetched)
+                    for id in Set(touched.map(self.resolve)) where fetched.contains(where: { $0.id == id }) {
                         try await self.reloadTasks(id)
                     }
-                    for (local, _) in self.aliases where self.tasks[local] != nil { self.tasks[local] = nil }
+                    self.syncProblem = nil
                 } catch {
-                    self.report(error)
+                    guard self.session == started else { return }
+                    self.touchedLists.formUnion(touched)
+                    self.reportSyncFailure(error)
                 }
                 self.scheduleSave()
             }
@@ -530,14 +651,22 @@ final class TaskStore: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.8, execute: work)
     }
 
-    private func report(_ error: Error) {
-        if case AuthError.notSignedIn = error {
-            messages.send("Signed out of Google — sign in again in Settings")
-        } else if (error as? URLError)?.code == .notConnectedToInternet {
-            messages.send("Offline — changes may not be saved")
-        } else {
-            messages.send(error.localizedDescription)
+    /// Background syncs fail quietly after the first time: the toast shows once, the problem stays visible
+    /// in the panel until a sync succeeds.
+    private func reportSyncFailure(_ error: Error) {
+        guard !Self.isSilent(error) else { return }
+        let message = Self.describe(error)
+        if syncProblem != message { messages.send(message) }
+        syncProblem = message
+    }
+
+    private static func describe(_ error: Error) -> String {
+        if case AuthError.notSignedIn = error { return "Signed out of Google — click the menu bar icon to sign in" }
+        if let code = (error as? URLError)?.code, [.notConnectedToInternet, .networkConnectionLost, .timedOut,
+                                                   .cannotFindHost, .cannotConnectToHost].contains(code) {
+            return "Can’t reach Google"
         }
+        return error.localizedDescription
     }
 
     // MARK: Demo
@@ -577,37 +706,38 @@ final class TaskStore: ObservableObject {
 
     // MARK: Cache
 
-    /// The last synced state, so the panel shows tasks at once on launch (the server refresh follows).
+    /// The last synced state, so the count and the panel are right at launch (the server refresh follows).
     private struct Cache: Codable {
         var lists: [TaskList]
         var tasks: [String: [TaskItem]]
     }
 
-    private static var cacheURL: URL {
+    nonisolated static var defaultCacheURL: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         return base.appendingPathComponent(Bundle.main.bundleIdentifier ?? "com.tachibanayu24.Dueday", isDirectory: true)
             .appendingPathComponent("cache.json")
     }
 
     private func loadCache() {
-        guard auth.isSignedIn, let data = try? Data(contentsOf: Self.cacheURL),
+        guard auth.isSignedIn, let cacheURL, let data = try? Data(contentsOf: cacheURL),
               let cache = try? JSONDecoder().decode(Cache.self, from: data) else { return }
         lists = cache.lists.filter { !$0.id.hasPrefix("local-") }
-        tasks = cache.tasks.mapValues { $0.filter { !$0.id.hasPrefix("local-") } }
-        let saved = UserDefaults.standard.string(forKey: "selectedList")
+        tasks = cache.tasks.filter { !$0.key.hasPrefix("local-") }.mapValues { $0.filter { !$0.id.hasPrefix("local-") } }
+        let saved = defaults.string(forKey: "selectedList")
         selectedListID = lists.contains { $0.id == saved } ? saved : lists.first?.id
     }
 
     private func scheduleSave() {
+        guard let cacheURL else { return }
         saveWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
-            guard let self, self.auth.isSignedIn else { return }
+            guard let self, self.auth.isSignedIn, !self.isDemo else { return }
             let cache = Cache(lists: self.lists, tasks: self.tasks)
             guard let data = try? JSONEncoder().encode(cache) else { return }
-            try? FileManager.default.createDirectory(at: Self.cacheURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try? data.write(to: Self.cacheURL, options: [.atomic])
+            try? FileManager.default.createDirectory(at: cacheURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? data.write(to: cacheURL, options: [.atomic])
             // The cache holds task contents: keep it private to this user.
-            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: Self.cacheURL.path)
+            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: cacheURL.path)
         }
         saveWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: work)

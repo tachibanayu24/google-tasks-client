@@ -22,11 +22,21 @@ struct RootView: View {
 
 private struct MainView: View {
     @ObservedObject var store: TaskStore
-    @State private var confirmingDelete: TaskList?
+    /// One banner at a time at the bottom of the panel: naming a list, or confirming a deletion.
+    @State private var banner: Banner?
+
+    private enum Banner: Equatable {
+        case create
+        case rename(TaskList)
+        case delete(TaskList)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
-            ListTabBar(store: store, onDeleteList: { list in withAnimation(.snappy) { confirmingDelete = list } })
+            ListTabBar(store: store,
+                       onCreateList: { show(.create) },
+                       onRenameList: { show(.rename($0)) },
+                       onDeleteList: { show(.delete($0)) })
                 .frame(height: 44)
             if let listID = store.selectedListID {
                 AddTaskField(store: store)
@@ -45,17 +55,40 @@ private struct MainView: View {
             }
         }
         .overlay(alignment: .bottom) {
-            if let list = confirmingDelete {
-                ConfirmBanner(message: "Delete “\(list.title)” and all its tasks?", action: "Delete",
-                              onConfirm: {
-                                  store.deleteList(list)
-                                  withAnimation(.snappy) { confirmingDelete = nil }
-                              },
-                              onCancel: { withAnimation(.snappy) { confirmingDelete = nil } })
+            if let banner {
+                bannerView(banner)
                     .padding(12)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
+        .onChange(of: store.isPanelOpen) { _, open in if !open { banner = nil } }
+    }
+
+    @ViewBuilder
+    private func bannerView(_ banner: Banner) -> some View {
+        switch banner {
+        case .create:
+            NameBanner(title: "New List", initial: "", action: "Create", onCommit: { name in
+                store.createList(title: name)
+                show(nil)
+            }, onCancel: { show(nil) })
+        case .rename(let list):
+            NameBanner(title: "Rename List", initial: list.title, action: "Rename", onCommit: { name in
+                store.renameList(list, to: name)
+                show(nil)
+            }, onCancel: { show(nil) })
+        case .delete(let list):
+            ConfirmBanner(message: "Delete “\(list.title)” and all its tasks?", action: "Delete",
+                          onConfirm: {
+                              store.deleteList(list)
+                              show(nil)
+                          },
+                          onCancel: { show(nil) })
+        }
+    }
+
+    private func show(_ banner: Banner?) {
+        withAnimation(.snappy) { self.banner = banner }
     }
 }
 
@@ -116,17 +149,44 @@ struct ConfirmBanner: View {
     }
 }
 
-/// Lets empty areas drag the borderless window.
-struct WindowDragArea: NSViewRepresentable {
-    final class DragView: NSView {
-        override func mouseDown(with event: NSEvent) {
-            if event.clickCount == 2 { return }
-            window?.performDrag(with: event)
+/// Names a list inside the panel (a popover wouldn't get the keyboard: the app is never activated).
+struct NameBanner: View {
+    let title: String
+    let initial: String
+    let action: String
+    let onCommit: (String) -> Void
+    let onCancel: () -> Void
+    @State private var name = ""
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title).font(.system(size: 13, weight: .semibold))
+            TextField("Name", text: $name)
+                .textFieldStyle(.roundedBorder)
+                .focused($focused)
+                .onSubmit(commit)
+                .onExitCommand(perform: onCancel)
+            HStack {
+                Spacer()
+                Button("Cancel", action: onCancel)
+                Button(action, action: commit)
+                    .buttonStyle(.glassProminent)
+                    .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
         }
-        override var mouseDownCanMoveWindow: Bool { true }
+        .padding(14)
+        .glassEffect(.regular, in: .rect(cornerRadius: 18))
+        .onAppear {
+            name = initial
+            focused = true
+        }
     }
-    func makeNSView(context: Context) -> NSView { DragView() }
-    func updateNSView(_ nsView: NSView, context: Context) {}
+
+    private func commit() {
+        guard !name.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+        onCommit(name)
+    }
 }
 
 // MARK: - Setup
@@ -199,7 +259,6 @@ struct SetupView: View {
             .padding(.bottom, 20)
         }
         .scrollIndicators(.never)
-        .background(WindowDragArea())
         .onAppear {
             clientID = auth.client?.clientID ?? ""
             clientSecret = auth.client?.clientSecret ?? ""

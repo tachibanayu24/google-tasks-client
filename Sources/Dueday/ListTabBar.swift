@@ -5,10 +5,10 @@ import SwiftUI
 /// (Google Tasks can't reorder lists through its API, so tabs can't be dragged.)
 struct ListTabBar: View {
     @ObservedObject var store: TaskStore
+    var onCreateList: () -> Void
+    var onRenameList: (TaskList) -> Void
     var onDeleteList: (TaskList) -> Void
     @Namespace private var selection
-    @State private var renaming: TaskList?
-    @State private var creating = false
 
     var body: some View {
         HStack(spacing: 6) {
@@ -25,15 +25,8 @@ struct ListTabBar: View {
                                     .id(list.id)
                                     .onTapGesture { withAnimation(.bouncy(duration: 0.35)) { store.select(listID: list.id) } }
                                     .contextMenu {
-                                        Button("Rename…") { renaming = list }
+                                        Button("Rename…") { onRenameList(list) }
                                         Button("Delete List…", role: .destructive) { onDeleteList(list) }
-                                    }
-                                    .popover(isPresented: Binding(get: { renaming?.id == list.id },
-                                                                  set: { if !$0 { renaming = nil } })) {
-                                        NamePopover(title: "Rename List", initial: list.title, action: "Rename") { name in
-                                            store.renameList(list, to: name)
-                                            renaming = nil
-                                        }
                                     }
                             }
                         }
@@ -52,7 +45,7 @@ struct ListTabBar: View {
                 }
             }
 
-            Button { creating = true } label: {
+            Button(action: onCreateList) {
                 Image(systemName: "plus")
                     .font(.system(size: 11, weight: .semibold))
                     .frame(width: 24, height: 24)
@@ -61,20 +54,13 @@ struct ListTabBar: View {
             .buttonStyle(HoverCircleStyle())
             .foregroundStyle(.secondary)
             .help("New List")
-            .popover(isPresented: $creating) {
-                NamePopover(title: "New List", initial: "", action: "Create") { name in
-                    store.createList(title: name)
-                    creating = false
-                }
-            }
 
-            ListMenu(store: store, onDeleteList: onDeleteList, onRename: { renaming = $0 })
+            ListMenu(store: store, onDeleteList: onDeleteList, onRename: onRenameList)
         }
         .padding(.leading, 10)
         .padding(.trailing, 8)
         .padding(.top, 8)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-        .background(WindowDragArea())
     }
 }
 
@@ -85,6 +71,10 @@ private struct ListMenu: View {
 
     var body: some View {
         Menu {
+            if let problem = store.syncProblem {
+                Text(problem)
+                Divider()
+            }
             Button("Refresh") { Task { await store.refresh() } }
             if let list = store.selectedList, !store.showingToday {
                 Divider()
@@ -97,7 +87,8 @@ private struct ListMenu: View {
             Button("Open Google Tasks") { NSWorkspace.shared.open(URL(string: "https://tasks.google.com/")!) }
             Button("Settings…") { NSApp.sendAction(#selector(AppDelegate.openSettings), to: nil, from: nil) }
         } label: {
-            Image(systemName: store.isSyncing ? "arrow.triangle.2.circlepath" : "ellipsis")
+            Image(systemName: store.isSyncing ? "arrow.triangle.2.circlepath"
+                : store.syncProblem != nil ? "exclamationmark.icloud" : "ellipsis")
                 .font(.system(size: 12, weight: .semibold))
                 .symbolEffect(.rotate, isActive: store.isSyncing)
                 .frame(width: 24, height: 24)
@@ -106,7 +97,8 @@ private struct ListMenu: View {
         .menuStyle(.button)
         .buttonStyle(HoverCircleStyle())
         .menuIndicator(.hidden)
-        .foregroundStyle(.secondary)
+        .foregroundStyle(store.syncProblem != nil && !store.isSyncing ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
+        .help(store.syncProblem ?? "")
         .fixedSize()
     }
 }
@@ -174,41 +166,5 @@ struct HoverCircleStyle: ButtonStyle {
         configuration.label
             .background(Circle().fill(Color.primary.opacity(configuration.isPressed ? 0.14 : hovering ? 0.08 : 0)))
             .onHover { hovering = $0 }
-    }
-}
-
-struct NamePopover: View {
-    let title: String
-    let initial: String
-    let action: String
-    let onCommit: (String) -> Void
-    @State private var name = ""
-    @FocusState private var focused: Bool
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(title).font(.system(size: 13, weight: .semibold))
-            TextField("Name", text: $name)
-                .textFieldStyle(.roundedBorder)
-                .frame(width: 200)
-                .focused($focused)
-                .onSubmit(commit)
-            HStack {
-                Spacer()
-                Button(action, action: commit)
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
-            }
-        }
-        .padding(14)
-        .onAppear {
-            name = initial
-            focused = true
-        }
-    }
-
-    private func commit() {
-        guard !name.trimmingCharacters(in: .whitespaces).isEmpty else { return }
-        onCommit(name)
     }
 }

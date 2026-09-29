@@ -77,9 +77,23 @@ struct APIError: LocalizedError {
     var errorDescription: String? { message }
 }
 
+/// The Google Tasks operations the store uses (a protocol so tests can stand in for Google).
+@MainActor
+protocol TasksService {
+    func lists() async throws -> [TaskList]
+    func createList(title: String) async throws -> TaskList
+    func renameList(_ id: String, title: String) async throws
+    func deleteList(_ id: String) async throws
+    func tasks(in list: String) async throws -> [TaskItem]
+    func insertTask(in list: String, fields: [String: Any], parent: String?, previous: String?) async throws -> TaskItem
+    func patchTask(in list: String, id: String, fields: [String: Any]) async throws -> TaskItem
+    func deleteTask(in list: String, id: String) async throws
+    func moveTask(in list: String, id: String, parent: String?, previous: String?, toList: String?) async throws -> TaskItem
+}
+
 /// Thin async wrapper over https://tasks.googleapis.com/tasks/v1.
 @MainActor
-struct TasksAPI {
+struct TasksAPI: TasksService {
     let auth: GoogleAuth
     private let base = URL(string: "https://tasks.googleapis.com/tasks/v1/")!
 
@@ -134,7 +148,7 @@ struct TasksAPI {
         _ = try await send("DELETE", "lists/\(list.pathEscaped)/tasks/\(id.pathEscaped)")
     }
 
-    func moveTask(in list: String, id: String, parent: String?, previous: String?, toList: String? = nil) async throws -> TaskItem {
+    func moveTask(in list: String, id: String, parent: String?, previous: String?, toList: String?) async throws -> TaskItem {
         var query: [URLQueryItem] = []
         if let parent { query.append(.init(name: "parent", value: parent)) }
         if let previous { query.append(.init(name: "previous", value: previous)) }
@@ -166,7 +180,12 @@ struct TasksAPI {
         var components = URLComponents(url: base.appendingPathComponent(path), resolvingAgainstBaseURL: false)!
         // appendingPathComponent would escape the "@" in "@me"; set the already-escaped path directly.
         components.percentEncodedPath = base.path + "/" + path
-        if !query.isEmpty { components.queryItems = query }
+        // Strict escaping: URLComponents leaves "+" alone, which Google would read as a space (page tokens).
+        if !query.isEmpty {
+            components.percentEncodedQueryItems = query.map {
+                URLQueryItem(name: $0.name, value: $0.value?.addingPercentEncoding(withAllowedCharacters: .queryValueAllowed))
+            }
+        }
         var req = URLRequest(url: components.url!)
         req.httpMethod = method
         req.setValue("Bearer \(try await auth.validAccessToken(forceRefresh: retrying))", forHTTPHeaderField: "Authorization")
@@ -189,6 +208,14 @@ struct TasksAPI {
         }
         return data
     }
+}
+
+private extension CharacterSet {
+    static let queryValueAllowed: CharacterSet = {
+        var set = CharacterSet.alphanumerics
+        set.insert(charactersIn: "-._~")
+        return set
+    }()
 }
 
 private extension String {

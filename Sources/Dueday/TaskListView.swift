@@ -26,8 +26,8 @@ struct TaskListView: View {
                     .modifier(RowChrome())
                     .padding(.top, 6)
                 if showCompleted {
-                    ForEach(completed) { task in
-                        TaskRow(store: store, task: task, depth: 0, listID: listID)
+                    ForEach(completed.map { TaskStore.Row(task: $0, depth: 0, id: store.rowID($0)) }) { row in
+                        TaskRow(store: store, task: row.task, depth: 0, listID: listID)
                             .modifier(RowChrome())
                     }
                 }
@@ -37,7 +37,7 @@ struct TaskListView: View {
         .scrollContentBackground(.hidden)
         .environment(\.defaultMinListRowHeight, 1)
         .animation(.snappy(duration: 0.28), value: rows.map(\.id))
-        .animation(.snappy(duration: 0.28), value: completed.map(\.id))
+        .animation(.snappy(duration: 0.28), value: completed.map(store.rowID))
         // Tasks scrolling up melt into the glass instead of being cut off at the add field.
         .mask(
             LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.03),
@@ -114,12 +114,12 @@ struct TaskRow: View {
     @State private var expanded = false
     @State private var hovering = false
     @State private var pickingDate = false
-    /// Set while the checkmark animates, before the task leaves for the Completed section.
-    @State private var checking = false
+    /// Pending while the checkmark animates, before the task leaves for the Completed section.
+    @State private var pendingCompletion: DispatchWorkItem?
     @FocusState private var titleFocused: Bool
     @FocusState private var notesFocused: Bool
 
-    private var done: Bool { task.isCompleted || checking }
+    private var done: Bool { task.isCompleted || pendingCompletion != nil }
     /// In Today the date is implied by the section, unless it's overdue.
     private var showsDueChip: Bool {
         guard let due = task.dueDate else { return false }
@@ -138,15 +138,17 @@ struct TaskRow: View {
                         .foregroundStyle(done ? .secondary : .primary)
                         .strikethrough(done, color: .secondary)
                         .onSubmit { titleFocused = false }
+                        .onExitCommand { titleFocused = false }
                         .disabled(task.isCompleted)
                     details
                 }
                 Spacer(minLength: 0)
-                if hovering && !expanded && !task.isCompleted {
+                // Kept while its date popover is up, so the popover keeps its anchor.
+                if (hovering || pickingDate) && !expanded && !task.isCompleted {
                     hoverActions.transition(.opacity)
                 }
             }
-            if store.addingSubtaskTo == task.id {
+            if store.addingSubtaskTo == store.rowID(task) {
                 SubtaskField(store: store, parent: task, listID: listID)
                     .padding(.leading, 28)
             }
@@ -169,6 +171,8 @@ struct TaskRow: View {
         .onChange(of: task.title) { _, new in if !titleFocused { title = new ?? "" } }
         .onChange(of: task.notes) { _, new in if !notesFocused { notes = new ?? "" } }
         .onChange(of: titleFocused) { _, focused in if !focused { commitTitle() } }
+        // Popovers go away with the panel; don't let their flags claim otherwise next time.
+        .onChange(of: store.isPanelOpen) { _, open in if !open { pickingDate = false } }
         .onChange(of: notesFocused) { _, focused in if !focused { store.setNotes(task, notes, in: listID) } }
     }
 
@@ -182,6 +186,7 @@ struct TaskRow: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1...12)
                 .focused($notesFocused)
+                .onExitCommand { notesFocused = false }
                 .disabled(task.isCompleted)
         } else if let notes = task.notes, !notes.isEmpty {
             Text(notes)
@@ -214,7 +219,7 @@ struct TaskRow: View {
                 if expanded {
                     Spacer(minLength: 0)
                     if depth == 0 && !task.isCompleted && !inToday {
-                        IconButton(icon: "arrow.turn.down.right", help: "Add Subtask") { store.addingSubtaskTo = task.id }
+                        IconButton(icon: "arrow.turn.down.right", help: "Add Subtask") { store.addingSubtaskTo = store.rowID(task) }
                     }
                     if let link = task.webViewLink.flatMap(URL.init(string:)) {
                         IconButton(icon: "arrow.up.forward.square", help: "Open in Google Tasks") { NSWorkspace.shared.open(link) }
@@ -255,7 +260,7 @@ struct TaskRow: View {
         }
         if !task.isCompleted && !inToday {
             if depth == 0 {
-                Button("Add Subtask") { store.addingSubtaskTo = task.id }
+                Button("Add Subtask") { store.addingSubtaskTo = store.rowID(task) }
             }
             if store.canIndent(task) {
                 Button("Make Subtask") { withAnimation(.snappy) { store.indent(task) } }
@@ -287,16 +292,26 @@ struct TaskRow: View {
     // MARK: Actions
 
     private func toggleDone() {
+        // A second click while the check is landing takes it back.
+        if let pending = pendingCompletion {
+            pending.cancel()
+            withAnimation(.snappy(duration: 0.2)) { pendingCompletion = nil }
+            return
+        }
         if task.isCompleted {
             withAnimation(.snappy) { store.setCompleted(task, false, in: listID) }
             return
         }
         commitTitle()
-        withAnimation(.snappy(duration: 0.2)) { checking = true }
+        let work = DispatchWorkItem { [task, listID, store] in
+            withAnimation(.snappy(duration: 0.3)) { store.setCompleted(task, true, in: listID) }
+        }
+        withAnimation(.snappy(duration: 0.2)) { pendingCompletion = work }
         // Let the check land before the task slides away into Completed.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
-            withAnimation(.snappy(duration: 0.3)) { store.setCompleted(task, true, in: listID) }
-            checking = false
+            guard !work.isCancelled else { return }
+            work.perform()
+            pendingCompletion = nil
         }
     }
 
@@ -341,7 +356,7 @@ private struct SubtaskField: View {
         .padding(.vertical, 4)
         .onAppear { focused = true }
         .onChange(of: focused) { _, f in
-            if !f && draft.isEmpty && store.addingSubtaskTo == parent.id { store.addingSubtaskTo = nil }
+            if !f && draft.isEmpty && store.addingSubtaskTo == store.rowID(parent) { store.addingSubtaskTo = nil }
         }
     }
 }
@@ -394,6 +409,7 @@ private struct DueChip: View {
         case 0: return "Today"
         case 1: return "Tomorrow"
         case -1: return "Yesterday"
+        case -6 ... -2: return "\(-days) days ago"
         case 2...6: return date.formatted(.dateTime.weekday(.wide))
         default:
             let sameYear = cal.component(.year, from: date) == cal.component(.year, from: today)
