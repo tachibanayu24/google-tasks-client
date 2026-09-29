@@ -29,7 +29,7 @@
 
   <img src="docs/menubar.png" width="360" alt="The menu bar item: a progress ring with the count, a check mark, and a party popper">
 
-- **Today, across lists.** Open it for one view of what's overdue, what's due today and what you've already done, each with the list it belongs to. Postpone to tomorrow with a right-click.
+- **Today, across lists.** Open it for one view of what's overdue, what's due today and what you've already done. Postpone to tomorrow with a right-click.
 - **Every list, too.** Each list is a tab. Add, edit and complete tasks. Drag to reorder, nest subtasks, set dates, write notes, move tasks between lists, and create or rename lists.
 - **Instant.** Edits show immediately and sync in the background, in order. Changes made elsewhere arrive within half a minute while the panel is open, and within five minutes in the menu bar.
 - **Liquid Glass**, in light and dark, from crystal clear to tinted.

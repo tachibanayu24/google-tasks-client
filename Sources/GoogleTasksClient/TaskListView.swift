@@ -105,7 +105,7 @@ struct TaskRow: View {
     let task: TaskItem
     let depth: Int
     let listID: String
-    /// In the Today tab: rows come from several lists, so the list is named and structure edits are off.
+    /// In the Today tab: rows come from several lists, so structure edits (subtasks, nesting) are off.
     var inToday = false
     @ObservedObject private var prefs = Preferences.shared
 
@@ -198,14 +198,8 @@ struct TaskRow: View {
         }
 
         let links = (task.links ?? []).filter { $0.link != nil }
-        if task.dueDate != nil || !links.isEmpty || expanded || inToday {
+        if showsDueChip || !links.isEmpty || expanded {
             HStack(spacing: 6) {
-                if inToday {
-                    Text(store.listTitle(listID))
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
-                }
                 if showsDueChip, let due = task.dueDate {
                     DueChip(date: due, done: task.isCompleted) { if !task.isCompleted { pickingDate = true } }
                         .popover(isPresented: $pickingDate, arrowEdge: .bottom) { datePicker }
