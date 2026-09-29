@@ -1,0 +1,23 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - name: Show toolchain
+        run: xcodebuild -version && swift --version
+      - name: Test
+        run: swift test
+      - name: Build app bundle
+        run: |
+          set -o pipefail
+          ./scripts/build-app.sh 2>&1 | tee build.log
+      - name: Fail on warnings from our sources
+        run: |
+          if grep -E "Sources/.*warning:" build.log; then exit 1; fi
