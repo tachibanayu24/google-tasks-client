@@ -28,7 +28,7 @@ extension String {
 	Makes the string localizable.
 	*/
 	var localized: String {
-		// Dueday patch: English only, compiled in (no resource bundle; see Package.swift).
+		// Google Tasks Client patch: English only, compiled in (no resource bundle; see Package.swift).
 		englishStrings[self] ?? self
 	}
 }

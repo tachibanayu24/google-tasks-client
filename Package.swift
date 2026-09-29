@@ -2,7 +2,7 @@
 import PackageDescription
 
 let package = Package(
-    name: "Dueday",
+    name: "GoogleTasksClient",
     platforms: [.macOS(.v26)],
     dependencies: [
         .package(path: "Vendor/KeyboardShortcuts"),  // patched: no resource bundle
@@ -10,18 +10,18 @@ let package = Package(
     ],
     targets: [
         .executableTarget(
-            name: "Dueday",
+            name: "GoogleTasksClient",
             dependencies: [
                 "KeyboardShortcuts",
                 .product(name: "LaunchAtLogin", package: "LaunchAtLogin-Modern"),
             ],
-            path: "Sources/Dueday",
+            path: "Sources/GoogleTasksClient",
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         .testTarget(
-            name: "DuedayTests",
-            dependencies: ["Dueday"],
-            path: "Tests/DuedayTests",
+            name: "GoogleTasksClientTests",
+            dependencies: ["GoogleTasksClient"],
+            path: "Tests/GoogleTasksClientTests",
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
     ]

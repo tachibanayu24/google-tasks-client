@@ -3,7 +3,7 @@ import Security
 
 /// One generic-password item per app holding the OAuth client and refresh token as JSON.
 enum Keychain {
-    private static var service: String { Bundle.main.bundleIdentifier ?? "com.tachibanayu24.Dueday" }
+    private static var service: String { Bundle.main.bundleIdentifier ?? "com.tachibanayu24.GoogleTasksClient" }
     private static let account = "google"
 
     static func load<T: Decodable>(_ type: T.Type) -> T? {
@@ -30,7 +30,7 @@ enum Keychain {
         if status == errSecItemNotFound {
             var add = query
             add[kSecValueData as String] = data
-            add[kSecAttrLabel as String] = "Dueday (Google)"
+            add[kSecAttrLabel as String] = "Google Tasks Client"
             SecItemAdd(add as CFDictionary, nil)
         }
     }

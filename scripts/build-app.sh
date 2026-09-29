@@ -1,23 +1,23 @@
 #!/bin/zsh
-# Builds "Dueday.app" into ./build.
+# Builds "Google Tasks Client.app" into ./build.
 #   --install  copy it to /Applications and launch it
-#   --dev      build "Dueday Dev.app" with its own bundle id (separate settings & account) for testing
+#   --dev      build "Google Tasks Client Dev.app" with its own bundle id (separate settings & account) for testing
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-APP_NAME="Dueday"
-BUNDLE_ID="com.tachibanayu24.Dueday"
+APP_NAME="Google Tasks Client"
+BUNDLE_ID="com.tachibanayu24.GoogleTasksClient"
 INSTALL=false
 for arg in "$@"; do
     case "$arg" in
-        --dev) APP_NAME="Dueday Dev"; BUNDLE_ID="com.tachibanayu24.Dueday.dev" ;;
+        --dev) APP_NAME="Google Tasks Client Dev"; BUNDLE_ID="com.tachibanayu24.GoogleTasksClient.dev" ;;
         --install) INSTALL=true ;;
         *) echo "unknown option: $arg" >&2; exit 64 ;;
     esac
 done
 VERSION="0.1.0"
 APP="build/${APP_NAME}.app"
-EXE="$APP/Contents/MacOS/Dueday"
+EXE="$APP/Contents/MacOS/GoogleTasksClient"
 
 swift build -c release --arch arm64
 BIN_DIR="$(swift build -c release --arch arm64 --show-bin-path)"
@@ -32,7 +32,7 @@ fi
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp "$BIN_DIR/Dueday" "$EXE"
+cp "$BIN_DIR/GoogleTasksClient" "$EXE"
 [[ -f Resources/AppIcon.icns ]] && cp Resources/AppIcon.icns "$APP/Contents/Resources/"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
@@ -43,7 +43,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundleName</key><string>${APP_NAME}</string>
     <key>CFBundleDisplayName</key><string>${APP_NAME}</string>
     <key>CFBundleIdentifier</key><string>${BUNDLE_ID}</string>
-    <key>CFBundleExecutable</key><string>Dueday</string>
+    <key>CFBundleExecutable</key><string>GoogleTasksClient</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>${VERSION}</string>
     <key>CFBundleVersion</key><string>1</string>

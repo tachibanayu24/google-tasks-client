@@ -209,7 +209,7 @@ struct SetupView: View {
                         .foregroundStyle(.tint)
                     Text("Connect Google Tasks")
                         .font(.system(size: 20, weight: .semibold))
-                    Text("Dueday talks to Google directly with your own OAuth client. Your tasks never pass through anyone else’s server.")
+                    Text("This app talks to Google directly with your own OAuth client. Your tasks never pass through anyone else’s server.")
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)

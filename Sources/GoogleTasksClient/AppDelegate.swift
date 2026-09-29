@@ -94,7 +94,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     }
 
     private func observeDev(_ name: String, _ handler: @escaping @MainActor (AppDelegate) -> Void) {
-        DistributedNotificationCenter.default().addObserver(forName: .init("DuedayDev." + name), object: nil,
+        DistributedNotificationCenter.default().addObserver(forName: .init("GoogleTasksClientDev." + name), object: nil,
                                                             queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
@@ -113,7 +113,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         menu.addItem(.separator())
         menu.addItem(withTitle: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
         menu.addItem(.separator())
-        menu.addItem(withTitle: "Quit Dueday", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        menu.addItem(withTitle: "Quit Google Tasks Client", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         menu.items.forEach { if $0.action != #selector(NSApplication.terminate(_:)) { $0.target = self } }
         return menu
     }
@@ -125,8 +125,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         let appMenu = NSMenu()
         appMenu.addItem(withTitle: "Settings…", action: #selector(openSettings), keyEquivalent: ",").target = self
         appMenu.addItem(withTitle: "Hide", action: #selector(hidePanel), keyEquivalent: "h").target = self
-        appMenu.addItem(withTitle: "Quit Dueday", action: #selector(quitWithConfirmation), keyEquivalent: "q").target = self
-        main.addItem(submenu: appMenu, title: "Dueday")
+        appMenu.addItem(withTitle: "Quit Google Tasks Client", action: #selector(quitWithConfirmation), keyEquivalent: "q").target = self
+        main.addItem(submenu: appMenu, title: "Google Tasks Client")
 
         let file = NSMenu(title: "File")
         file.addItem(withTitle: "New Task", action: #selector(newTask), keyEquivalent: "n").target = self
@@ -234,7 +234,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             host.sizingOptions = [.preferredContentSize]
             window.contentViewController = host
             window.setContentSize(host.view.fittingSize)
-            window.title = "Dueday Settings"
+            window.title = "Google Tasks Client Settings"
             window.appearance = prefs.theme.appearance
             window.isReleasedWhenClosed = false
             window.delegate = self

@@ -179,7 +179,7 @@ final class PanelController: NSObject, NSWindowDelegate {
         guard auth.isSignedIn || store.isDemo else {
             button.image = StatusIcon.symbol("checklist")
             button.title = ""
-            button.toolTip = "Dueday — not signed in"
+            button.toolTip = "Google Tasks Client — not signed in"
             return
         }
         let today = store.today
@@ -342,7 +342,7 @@ final class PanelController: NSObject, NSWindowDelegate {
 /// Menu bar images. Template images follow the menu bar's own light/dark rendering.
 enum StatusIcon {
     static func symbol(_ name: String) -> NSImage? {
-        let image = NSImage(systemSymbolName: name, accessibilityDescription: "Dueday")?
+        let image = NSImage(systemSymbolName: name, accessibilityDescription: "Google Tasks Client")?
             .withSymbolConfiguration(.init(pointSize: 14, weight: .medium))
         image?.isTemplate = true
         return image

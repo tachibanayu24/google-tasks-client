@@ -1,6 +1,6 @@
 import Combine
 import Foundation
-@testable import Dueday
+@testable import GoogleTasksClient
 
 @MainActor
 final class FakeAuth: AuthSession {

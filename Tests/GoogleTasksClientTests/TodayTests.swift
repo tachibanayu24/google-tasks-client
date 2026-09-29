@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import Dueday
+@testable import GoogleTasksClient
 
 @MainActor
 @Suite struct TodayTests {
@@ -12,7 +12,7 @@ import Testing
     }
 
     func makeStore() async -> TaskStore {
-        let defaults = UserDefaults(suiteName: "DuedayTests-" + UUID().uuidString)!
+        let defaults = UserDefaults(suiteName: "GoogleTasksClientTests-" + UUID().uuidString)!
         let store = TaskStore(auth: auth, api: google, defaults: defaults, cacheURL: nil, reconcileDelay: .zero)
         await store.refresh()
         return store

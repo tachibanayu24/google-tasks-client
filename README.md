@@ -1,10 +1,10 @@
-# Dueday
+# Google Tasks Client
 
-[![Build](https://github.com/tachibanayu24/dueday/actions/workflows/build.yml/badge.svg)](https://github.com/tachibanayu24/dueday/actions/workflows/build.yml)
+[![Build](https://github.com/tachibanayu24/google-tasks-client/actions/workflows/build.yml/badge.svg)](https://github.com/tachibanayu24/google-tasks-client/actions/workflows/build.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![macOS 26+](https://img.shields.io/badge/macOS-26%2B-black)
 
-Google Tasks in your menu bar. Dueday counts what's due today and what's overdue, fills a ring as you get through it, and throws confetti when the day is done.
+Google Tasks in your menu bar. It counts what's due today and what's overdue, fills a ring as you get through it, and throws confetti when the day is done.
 
 <p align="center">
   <img src="docs/today.png" width="330" alt="The Today view: overdue and today's tasks across all lists">
@@ -19,15 +19,15 @@ Google Tasks in your menu bar. Dueday counts what's due today and what's overdue
 - **Every list, too.** Each list is a tab: add, edit, complete, reorder by dragging, nest subtasks, set dates, move tasks between lists, create and rename lists.
 - **Instant.** Edits show immediately and sync in the background, in order. Changes made on your phone show up within half a minute while the panel is open, and within five minutes in the menu bar.
 - **Liquid Glass.** A glass panel that drops from the menu bar, from crystal clear to tinted.
-- **Your own keys, no server.** Dueday talks to Google directly with an OAuth client you create. Nothing passes through anyone else.
+- **Your own keys, no server.** The app talks to Google directly with an OAuth client you create. Nothing passes through anyone else.
 
 ### What it doesn't do
 
-Dueday only does what the [Google Tasks API](https://developers.google.com/workspace/tasks/reference/rest) allows. The API can't read or set a task's **time** (dates only), **repeat** rules, **stars**, or **reminders**, and can't reorder lists — so Dueday doesn't either. Tasks with those still show up; edit those details in Google Tasks itself (every task has *Open in Google Tasks*).
+It only does what the [Google Tasks API](https://developers.google.com/workspace/tasks/reference/rest) allows. The API can't read or set a task's **time** (dates only), **repeat** rules, **stars**, or **reminders**, and can't reorder lists — so neither does this app. Tasks with those still show up; edit those details in Google Tasks itself (every task has *Open in Google Tasks*).
 
 ## Setup
 
-Dueday ships without any Google credentials: you use your own OAuth client, which takes about five minutes once.
+The app ships without any Google credentials: you use your own OAuth client, which takes about five minutes once.
 
 1. **Create a project** in the [Google Cloud console](https://console.cloud.google.com/projectcreate) (any name).
 2. **Enable the API:** [Google Tasks API](https://console.cloud.google.com/apis/library/tasks.googleapis.com) → *Enable*.
@@ -35,7 +35,7 @@ Dueday ships without any Google credentials: you use your own OAuth client, whic
 4. **Publish it:** [Audience](https://console.cloud.google.com/auth/audience) → **Publish app** → *Confirm*.
    While a project is in *Testing*, Google expires sign-ins after 7 days. Publishing does not make anything public, and there's no review to wait for when only you use it.
 5. **Create the client:** [Clients](https://console.cloud.google.com/auth/clients) → *Create client* → Application type **Desktop app** → *Create*. Copy the **Client ID** and **Client secret**.
-6. **Sign in:** click Dueday in the menu bar, paste both, and press *Sign in with Google*.
+6. **Sign in:** click the app's menu bar item, paste both, and press *Sign in with Google*.
    Google will say the app isn't verified — it's your own app, so choose *Advanced* → *Go to …* and allow access to Google Tasks.
 
 The client and the sign-in are stored in your login keychain. The only scope requested is `https://www.googleapis.com/auth/tasks`.
@@ -45,12 +45,12 @@ The client and the sign-in are stored in your login keychain. The only scope req
 Requires macOS 26 or later and Xcode 26 (Swift 6.2) to build.
 
 ```sh
-git clone https://github.com/tachibanayu24/dueday.git
-cd dueday
+git clone https://github.com/tachibanayu24/google-tasks-client.git
+cd google-tasks-client
 ./scripts/build-app.sh --install   # builds, copies to /Applications and launches
 ```
 
-Dueday lives in the menu bar (no Dock icon). It is ad-hoc signed, so build it on the Mac that runs it. After rebuilding, macOS may ask once whether Dueday may use its keychain item — choose *Always Allow*.
+The app lives in the menu bar (no Dock icon). It is ad-hoc signed, so build it on the Mac that runs it. After rebuilding, macOS may ask once whether the app may use its keychain item — choose *Always Allow*.
 
 ## Usage
 
@@ -80,7 +80,7 @@ On a task: click the circle to complete it, click the title to edit it, click th
 | `PanelController` | Menu bar item (count, progress ring, party popper) and the non-activating glass panel it opens |
 | `TodayView`, `TaskListView`, `ListTabBar` | The SwiftUI views |
 
-The menu bar count is kept fresh every 5 minutes, after waking from sleep, and at midnight; while the panel is open, every 30 seconds. The last synced state is cached (`~/Library/Application Support/com.tachibanayu24.Dueday/cache.json`, readable only by you) so the count is right the moment Dueday starts.
+The menu bar count is kept fresh every 5 minutes, after waking from sleep, and at midnight; while the panel is open, every 30 seconds. The last synced state is cached (`~/Library/Application Support/com.tachibanayu24.GoogleTasksClient/cache.json`, readable only by you) so the count is right the moment the app starts.
 
 `Vendor/` holds [KeyboardShortcuts](https://github.com/sindresorhus/KeyboardShortcuts), patched to compile its English strings in, so the app needs no SwiftPM resource bundle (SwiftPM's generated lookup can't find one inside a signed app).
 
@@ -88,8 +88,8 @@ The menu bar count is kept fresh every 5 minutes, after waking from sleep, and a
 
 ```sh
 swift build                        # compile
-./scripts/build-app.sh             # build/Dueday.app
-./scripts/build-app.sh --dev       # "Dueday Dev.app": its own bundle id, settings and account
+./scripts/build-app.sh             # build/Google Tasks Client.app
+./scripts/build-app.sh --dev       # "Google Tasks Client Dev.app": its own bundle id, settings and account
 swift scripts/make-icon.swift      # regenerate the icon
 ```
 
@@ -97,12 +97,12 @@ The dev app never takes the keyboard on its own. It listens for distributed noti
 
 | Notification | Effect |
 |---|---|
-| `DuedayDev.demo` | Load sample lists and tasks (edits stay local, nothing is sent to Google) |
-| `DuedayDev.preview` | Open the panel without taking the keyboard |
-| `DuedayDev.toggle` | Open / close the panel |
-| `DuedayDev.finish` | Complete everything due today (to see the celebration) |
-| `DuedayDev.next` | Next tab |
-| `DuedayDev.settings` | Open Settings |
+| `GoogleTasksClientDev.demo` | Load sample lists and tasks (edits stay local, nothing is sent to Google) |
+| `GoogleTasksClientDev.preview` | Open the panel without taking the keyboard |
+| `GoogleTasksClientDev.toggle` | Open / close the panel |
+| `GoogleTasksClientDev.finish` | Complete everything due today (to see the celebration) |
+| `GoogleTasksClientDev.next` | Next tab |
+| `GoogleTasksClientDev.settings` | Open Settings |
 
 See [CONTRIBUTING.md](CONTRIBUTING.md).
 

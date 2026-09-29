@@ -1,5 +1,5 @@
 // swift-tools-version:6.2
-// Vendored from https://github.com/sindresorhus/KeyboardShortcuts (MIT) — patched for Dueday:
+// Vendored from https://github.com/sindresorhus/KeyboardShortcuts (MIT) — patched for Google Tasks Client:
 // localized strings are compiled in (English only) so no SwiftPM resource bundle is needed.
 import PackageDescription
 

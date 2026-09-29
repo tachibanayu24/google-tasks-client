@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import Dueday
+@testable import GoogleTasksClient
 
 @Suite struct LoopbackServerTests {
     /// Opens a raw TCP connection to 127.0.0.1:port and sends `chunks` with a pause between them.

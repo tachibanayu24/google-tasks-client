@@ -764,7 +764,7 @@ final class TaskStore: ObservableObject {
 
     nonisolated static var defaultCacheURL: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        return base.appendingPathComponent(Bundle.main.bundleIdentifier ?? "com.tachibanayu24.Dueday", isDirectory: true)
+        return base.appendingPathComponent(Bundle.main.bundleIdentifier ?? "com.tachibanayu24.GoogleTasksClient", isDirectory: true)
             .appendingPathComponent("cache.json")
     }
 

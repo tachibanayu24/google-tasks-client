@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import Dueday
+@testable import GoogleTasksClient
 
 @MainActor
 @Suite struct TaskStoreTests {
@@ -15,7 +15,7 @@ import Testing
     }
 
     func makeStore() async -> TaskStore {
-        let defaults = UserDefaults(suiteName: "DuedayTests-" + UUID().uuidString)!
+        let defaults = UserDefaults(suiteName: "GoogleTasksClientTests-" + UUID().uuidString)!
         let store = TaskStore(auth: auth, api: google, defaults: defaults, cacheURL: nil, reconcileDelay: .zero)
         await store.refresh()
         store.select(listID: inbox)
@@ -260,7 +260,7 @@ import Testing
     }
 
     @Test func aNewListStaysSelectedAcrossRelaunch() async {
-        let defaults = UserDefaults(suiteName: "DuedayTests-" + UUID().uuidString)!
+        let defaults = UserDefaults(suiteName: "GoogleTasksClientTests-" + UUID().uuidString)!
         let store = TaskStore(auth: auth, api: google, defaults: defaults, cacheURL: nil, reconcileDelay: .zero)
         await store.refresh()
         store.createList(title: "Groceries")

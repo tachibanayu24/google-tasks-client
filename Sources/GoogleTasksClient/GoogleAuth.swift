@@ -360,7 +360,7 @@ final class LoopbackServer: @unchecked Sendable {
         // the port) gets a 404 and the wait goes on.
         let handled = params?["state"] == expectedState && (params?["code"] != nil || params?["error"] != nil)
         let body = handled
-            ? "<!doctype html><meta charset=utf-8><title>Dueday</title><body style=\"font:15px -apple-system;text-align:center;padding-top:80px\"><h2>Signed in to Dueday</h2><p>You can close this tab.</p>"
+            ? "<!doctype html><meta charset=utf-8><title>Google Tasks Client</title><body style=\"font:15px -apple-system;text-align:center;padding-top:80px\"><h2>Signed in to Google Tasks Client</h2><p>You can close this tab.</p>"
             : "Not found"
         let response = "HTTP/1.1 \(handled ? "200 OK" : "404 Not Found")\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: \(body.utf8.count)\r\nConnection: close\r\n\r\n\(body)"
         _ = response.withCString { write(client, $0, strlen($0)) }
