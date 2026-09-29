@@ -21,7 +21,7 @@ let image = NSImage(size: NSSize(width: size, height: size), flipped: false) { _
                         NSColor(srgbRed: 0.25, green: 0.48, blue: 0.98, alpha: 1)])!
         .draw(in: shape, angle: -60)
 
-    // A task card sliding in from the right edge.
+    // A card with three tasks, the first one done.
     let card = NSRect(x: rect.minX + 250, y: rect.minY + 150, width: rect.width - 250, height: rect.height - 300)
     let cardPath = NSBezierPath(roundedRect: card, xRadius: 60, yRadius: 60)
     NSGraphicsContext.saveGraphicsState()

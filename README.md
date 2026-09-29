@@ -101,6 +101,8 @@ The dev app never takes the keyboard on its own. It listens for distributed noti
 | `DuedayDev.preview` | Open the panel without taking the keyboard |
 | `DuedayDev.toggle` | Open / close the panel |
 | `DuedayDev.finish` | Complete everything due today (to see the celebration) |
+| `DuedayDev.next` | Next tab |
+| `DuedayDev.settings` | Open Settings |
 
 See [CONTRIBUTING.md](CONTRIBUTING.md).
 

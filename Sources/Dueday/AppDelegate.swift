@@ -19,6 +19,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         panel = PanelController(store: store, auth: auth, menu: buildStatusMenu())
 
         buildMainMenu()
+        // Signing in happens in the browser (which closes the panel); come back with the tasks once done.
+        auth.$isSignedIn
+            .removeDuplicates()
+            .dropFirst()
+            .filter { $0 }
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.panel.show() }
+            .store(in: &cancellables)
+        prefs.$theme
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] theme in self?.settingsWindow?.appearance = theme.appearance }
+            .store(in: &cancellables)
         KeyboardShortcuts.onKeyDown(for: .togglePanel) { [weak self] in self?.panel.toggle() }
         installDevHooks()
         startBackgroundSync()
@@ -66,6 +78,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             app.panel.toggle()
         }
         observeDev("demo") { app in app.store.loadDemo() }
+        observeDev("next") { app in app.store.selectList(offset: 1) }
+        observeDev("settings") { app in app.openSettings() }
         observeDev("finish") { app in
             let today = app.store.today
             withAnimation(.snappy) {
@@ -221,6 +235,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             window.contentViewController = host
             window.setContentSize(host.view.fittingSize)
             window.title = "Dueday Settings"
+            window.appearance = prefs.theme.appearance
             window.isReleasedWhenClosed = false
             window.delegate = self
             settingsWindow = window
