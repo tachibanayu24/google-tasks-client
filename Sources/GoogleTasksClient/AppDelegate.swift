@@ -80,6 +80,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         observeDev("demo") { app in app.store.loadDemo() }
         observeDev("next") { app in app.store.selectList(offset: 1) }
         observeDev("settings") { app in app.openSettings() }
+        observeDev("zoom") { app in app.panel.zoomForCapture() }
         observeDev("finish") { app in
             let today = app.store.today
             withAnimation(.snappy) {

@@ -218,7 +218,7 @@ struct SetupView: View {
                 VStack(alignment: .leading, spacing: 10) {
                     step(1, "Enable the Google Tasks API in a Google Cloud project.",
                          link: ("Open API Library", "https://console.cloud.google.com/apis/library/tasks.googleapis.com"))
-                    step(2, "Set up the consent screen (External), then press “Publish app” under Audience — in Testing mode Google signs you out every 7 days.",
+                    step(2, "Set up the consent screen (External; an app name without “Google”), then press “Publish app” under Audience — in Testing mode Google signs you out every 7 days.",
                          link: ("Open Audience", "https://console.cloud.google.com/auth/audience"))
                     step(3, "Create an OAuth client of type “Desktop app” and copy its ID and secret.",
                          link: ("Open Clients", "https://console.cloud.google.com/auth/clients"))

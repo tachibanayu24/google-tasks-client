@@ -45,6 +45,8 @@ final class PanelController: NSObject, NSWindowDelegate {
     private let glass = NSGlassEffectView()
     private var cancellables = Set<AnyCancellable>()
     private var outsideClickMonitor: Any?
+    /// Dev builds only: set while zoomed for a documentation capture, when other apps come and go.
+    private var isCapturing = false
 
     private(set) var isShown = false
     private var animationGeneration = 0
@@ -142,7 +144,10 @@ final class PanelController: NSObject, NSWindowDelegate {
         NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didActivateApplicationNotification)
             .compactMap { $0.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication }
             .filter { $0 != NSRunningApplication.current }
-            .sink { [weak self] _ in self?.hide() }
+            .sink { [weak self] _ in
+                guard self?.isCapturing == false else { return }
+                self?.hide()
+            }
             .store(in: &cancellables)
 
         prefs.$opacity.combineLatest(prefs.$theme)
@@ -318,6 +323,32 @@ final class PanelController: NSObject, NSWindowDelegate {
     private func removeOutsideClickMonitor() {
         if let monitor = outsideClickMonitor { NSEvent.removeMonitor(monitor) }
         outsideClickMonitor = nil
+    }
+
+    /// Dev builds only: shows the panel at twice its size with everything drawn 2x, so a 1x display can
+    /// capture Retina-quality documentation images.
+    func zoomForCapture() {
+        guard let root = panel.contentView else { return }
+        isCapturing = true
+        removeOutsideClickMonitor()
+        let frame = panel.frame
+        // Room above for the drawn menu bar of the documentation backdrop (scripts/docs).
+        let screen = panel.screen?.frame ?? .zero
+        panel.setFrame(NSRect(x: screen.midX - frame.width, y: screen.maxY - 140 - frame.height * 2,
+                              width: frame.width * 2, height: frame.height * 2), display: true)
+        root.layer?.cornerRadius = cornerRadius * 2
+        for view in root.subviews {
+            if let glass = view as? NSGlassEffectView { glass.cornerRadius = cornerRadius * 2 }
+            guard view is NSHostingView<RootView> else { continue }
+            // The content keeps its 1x layout inside a container whose coordinates are scaled by two.
+            let container = NSView(frame: root.bounds)
+            container.autoresizingMask = [.width, .height]
+            root.replaceSubview(view, with: container)
+            container.setBoundsSize(frame.size)
+            view.autoresizingMask = []
+            view.frame = NSRect(origin: .zero, size: frame.size)
+            container.addSubview(view)
+        }
     }
 
     // MARK: Sync while open
