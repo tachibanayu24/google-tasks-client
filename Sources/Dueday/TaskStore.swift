@@ -77,15 +77,18 @@ final class TaskStore: ObservableObject {
     /// Google's id → the placeholder the UI has known the task by.
     private var rowIDs: [String: String] = [:]
     private var touchedLists = Set<String>()
-    private var reconcileWork: DispatchWorkItem?
+    private var reconcileTask: Task<Void, Never>?
+    private let reconcileDelay: Duration
     private var saveWork: DispatchWorkItem?
     private var cancellables = Set<AnyCancellable>()
 
-    init(auth: AuthSession, api: TasksService, defaults: UserDefaults = .standard, cacheURL: URL? = TaskStore.defaultCacheURL) {
+    init(auth: AuthSession, api: TasksService, defaults: UserDefaults = .standard, cacheURL: URL? = TaskStore.defaultCacheURL,
+         reconcileDelay: Duration = .milliseconds(800)) {
         self.auth = auth
         self.api = api
         self.defaults = defaults
         self.cacheURL = cacheURL
+        self.reconcileDelay = reconcileDelay
         showingToday = defaults.object(forKey: "showingToday") as? Bool ?? true
         loadCache()
         auth.signedInChanges
@@ -242,7 +245,8 @@ final class TaskStore: ObservableObject {
     private func resetAfterSignOut() {
         session += 1
         writeChain?.cancel()
-        reconcileWork?.cancel()
+        reconcileTask?.cancel()
+        reconcileTask = nil
         lists = []
         tasks = [:]
         selectedListID = nil
@@ -581,7 +585,8 @@ final class TaskStore: ObservableObject {
         guard !isDemo else { return }
         pendingWrites += 1
         if let listID { touchedLists.insert(listID) }
-        reconcileWork?.cancel()
+        reconcileTask?.cancel()
+        reconcileTask = nil
         let previous = writeChain
         let started = session
         writeChain = Task { [weak self] in
@@ -614,41 +619,58 @@ final class TaskStore: ObservableObject {
         scheduleReconcile()
     }
 
-    /// After the queue drains, take the server's word for everything touched.
+    /// After the queue drains (and a short pause, in case more edits follow), take the server's word for
+    /// everything touched.
     private func scheduleReconcile() {
-        reconcileWork?.cancel()
-        let work = DispatchWorkItem { [weak self] in
-            guard let self, self.pendingWrites == 0 else { return }
-            // A failed write leaves the local copy wrong, so the selected list is always re-read too.
-            var touched = self.touchedLists
-            if let selected = self.selectedListID { touched.insert(selected) }
-            self.touchedLists = []
-            let started = self.session
-            Task {
-                do {
-                    let generation = self.editGeneration
-                    let fetched = try await self.api.lists()
-                    guard self.session == started else { return }
-                    guard generation == self.editGeneration, self.pendingWrites == 0 else {
-                        // Edited meanwhile: that edit's own drain reconciles these too.
-                        self.touchedLists.formUnion(touched)
-                        return
-                    }
-                    self.applyLists(fetched)
-                    for id in Set(touched.map(self.resolve)) where fetched.contains(where: { $0.id == id }) {
-                        try await self.reloadTasks(id)
-                    }
-                    self.syncProblem = nil
-                } catch {
-                    guard self.session == started else { return }
-                    self.touchedLists.formUnion(touched)
-                    self.reportSyncFailure(error)
-                }
-                self.scheduleSave()
+        reconcileTask?.cancel()
+        let delay = reconcileDelay
+        reconcileTask = Task { [weak self] in
+            try? await Task.sleep(for: delay)
+            guard !Task.isCancelled, let self else { return }
+            await self.reconcile()
+            if !Task.isCancelled { self.reconcileTask = nil }
+        }
+    }
+
+    private func reconcile() async {
+        guard pendingWrites == 0 else { return }
+        // A failed write leaves the local copy wrong, so the selected list is always re-read too.
+        var touched = touchedLists
+        if let selected = selectedListID { touched.insert(selected) }
+        touchedLists = []
+        let started = session
+        do {
+            let generation = editGeneration
+            let fetched = try await api.lists()
+            guard session == started else { return }
+            guard generation == editGeneration, pendingWrites == 0 else {
+                // Edited meanwhile: that edit's own drain reconciles these too.
+                touchedLists.formUnion(touched)
+                return
+            }
+            applyLists(fetched)
+            for id in Set(touched.map(resolve)) where fetched.contains(where: { $0.id == id }) {
+                try await reloadTasks(id)
+            }
+            syncProblem = nil
+        } catch {
+            guard session == started else { return }
+            touchedLists.formUnion(touched)
+            reportSyncFailure(error)
+        }
+        scheduleSave()
+    }
+
+    /// Waits until every queued write has been sent and the reconcile after it has finished.
+    func settle() async {
+        while true {
+            await writeChain?.value
+            if let reconcileTask {
+                await reconcileTask.value
+            } else if pendingWrites == 0 {
+                return
             }
         }
-        reconcileWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8, execute: work)
     }
 
     /// Background syncs fail quietly after the first time: the toast shows once, the problem stays visible

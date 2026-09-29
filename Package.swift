@@ -18,5 +18,11 @@ let package = Package(
             path: "Sources/Dueday",
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
+        .testTarget(
+            name: "DuedayTests",
+            dependencies: ["Dueday"],
+            path: "Tests/DuedayTests",
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
     ]
 )
