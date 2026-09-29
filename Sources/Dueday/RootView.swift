@@ -25,7 +25,7 @@ private struct MainView: View {
     /// One banner at a time at the bottom of the panel: naming a list, or confirming a deletion.
     @State private var banner: Banner?
 
-    private enum Banner: Equatable {
+    private enum Banner: Hashable {
         case create
         case rename(TaskList)
         case delete(TaskList)
@@ -57,6 +57,8 @@ private struct MainView: View {
         .overlay(alignment: .bottom) {
             if let banner {
                 bannerView(banner)
+                    // A fresh field for every banner, even when one rename follows another.
+                    .id(banner)
                     .padding(12)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }

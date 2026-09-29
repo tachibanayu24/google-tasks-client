@@ -33,6 +33,9 @@ final class FakeTasks: TasksService {
     /// Names of calls that should fail next (each entry fails once).
     var failing: [String] = []
     private(set) var calls: [String] = []
+    /// Reads answer late with what Google had when they were asked; writes take a while.
+    var readDelay: Duration?
+    var writeDelay: Duration?
 
     // MARK: Test helpers
 
@@ -74,11 +77,14 @@ final class FakeTasks: TasksService {
 
     func lists() async throws -> [TaskList] {
         try check("lists")
-        return lists
+        let snapshot = lists
+        if let readDelay { try await Task.sleep(for: readDelay) }
+        return snapshot
     }
 
     func createList(title: String) async throws -> TaskList {
         try check("createList")
+        if let writeDelay { try await Task.sleep(for: writeDelay) }
         let list = TaskList(id: makeID("list"), title: title)
         lists.append(list)
         return list
@@ -100,11 +106,14 @@ final class FakeTasks: TasksService {
     func tasks(in list: String) async throws -> [TaskItem] {
         try check("tasks")
         guard lists.contains(where: { $0.id == list }) else { throw FakeError(message: "404 list") }
-        return tasks.values.filter { $0.list == list }.map { materialize($0.task.id) }
+        let snapshot = tasks.values.filter { $0.list == list }.map { materialize($0.task.id) }
+        if let readDelay { try await Task.sleep(for: readDelay) }
+        return snapshot
     }
 
     func insertTask(in list: String, fields: [String: Any], parent: String?, previous: String?) async throws -> TaskItem {
         try check("insertTask")
+        if let writeDelay { try await Task.sleep(for: writeDelay) }
         guard lists.contains(where: { $0.id == list }) else { throw FakeError(message: "404 list") }
         if let parent { try validateParent(parent, in: list) }
         let id = makeID("task")

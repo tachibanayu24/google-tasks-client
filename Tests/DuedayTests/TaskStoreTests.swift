@@ -249,7 +249,67 @@ import Testing
         #expect(!store.lists.contains { $0.id == work })
     }
 
+    @Test func subtasksCantBeAddedUnderSubtasks() async {
+        let done = google.seedTask("Done parent", in: inbox, completed: true)
+        google.seedTask("Orphan", in: inbox, parent: done)
+        let store = await makeStore()
+        store.addTask(title: "Nested", parent: row(store, "Orphan"))
+        await store.settle()
+        #expect(google.task(titled: "Nested") == nil)
+        #expect(!google.calls.contains("insertTask"))
+    }
+
+    @Test func aNewListStaysSelectedAcrossRelaunch() async {
+        let defaults = UserDefaults(suiteName: "DuedayTests-" + UUID().uuidString)!
+        let store = TaskStore(auth: auth, api: google, defaults: defaults, cacheURL: nil, reconcileDelay: .zero)
+        await store.refresh()
+        store.createList(title: "Groceries")
+        await store.settle()
+        #expect(defaults.string(forKey: "selectedList") == google.lists.first { $0.title == "Groceries" }?.id)
+    }
+
+    // MARK: Races
+
+    @Test func aPollOverlappingACreateDoesntUndoIt() async throws {
+        let store = await makeStore()
+        google.readDelay = .milliseconds(80)
+        google.writeDelay = .milliseconds(20)
+        store.createList(title: "Groceries")
+        // The poll starts while the create is on its way and answers with what Google had before it.
+        await store.refresh()
+        #expect(store.selectedList?.title == "Groceries")
+        store.addTask(title: "Milk")
+        await store.settle()
+        let groceries = google.lists.first { $0.title == "Groceries" }!.id
+        #expect(google.outline(groceries) == ["Milk"])
+        #expect(google.outline(inbox).isEmpty)
+    }
+
+    @Test func aPollOverlappingAnAddDoesntHideTheTask() async throws {
+        let store = await makeStore()
+        // The task list is read while the insert is still on its way, and lands after it finished.
+        google.readDelay = .milliseconds(80)
+        google.writeDelay = .milliseconds(150)
+        store.addTask(title: "Fresh")
+        await store.refresh()
+        #expect(titles(store, inbox) == ["Fresh"])
+        await store.settle()
+        #expect(titles(store, inbox) == ["Fresh"])
+    }
+
     // MARK: Failures
+
+    @Test func aFailedChildCreateDoesntStopCompletingTheRest() async {
+        let parent = google.seedTask("Parent", in: inbox)
+        google.seedTask("Real child", in: inbox, parent: parent)
+        let store = await makeStore()
+        google.failing = ["insertTask"]
+        store.addTask(title: "Ghost child", parent: row(store, "Parent"))
+        store.setCompleted(row(store, "Parent"), true, in: inbox)
+        await store.settle()
+        #expect(google.task(titled: "Parent")?.isCompleted == true)
+        #expect(google.task(titled: "Real child")?.isCompleted == true)
+    }
 
     @Test func aFailedCreateDropsItsFollowUpsWithOneMessage() async {
         let store = await makeStore()

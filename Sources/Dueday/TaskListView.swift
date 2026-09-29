@@ -120,6 +120,8 @@ struct TaskRow: View {
     @FocusState private var notesFocused: Bool
 
     private var done: Bool { task.isCompleted || pendingCompletion != nil }
+    /// Only real top-level tasks: not subtasks, nor subtasks shown at the top because their parent is done.
+    private var canHaveSubtasks: Bool { task.parent == nil && !task.isCompleted && !inToday }
     /// In Today the date is implied by the section, unless it's overdue.
     private var showsDueChip: Bool {
         guard let due = task.dueDate else { return false }
@@ -218,7 +220,7 @@ struct TaskRow: View {
                 }
                 if expanded {
                     Spacer(minLength: 0)
-                    if depth == 0 && !task.isCompleted && !inToday {
+                    if canHaveSubtasks {
                         IconButton(icon: "arrow.turn.down.right", help: "Add Subtask") { store.addingSubtaskTo = store.rowID(task) }
                     }
                     if let link = task.webViewLink.flatMap(URL.init(string:)) {
@@ -259,7 +261,7 @@ struct TaskRow: View {
             Divider()
         }
         if !task.isCompleted && !inToday {
-            if depth == 0 {
+            if canHaveSubtasks {
                 Button("Add Subtask") { store.addingSubtaskTo = store.rowID(task) }
             }
             if store.canIndent(task) {

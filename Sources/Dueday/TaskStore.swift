@@ -72,6 +72,8 @@ final class TaskStore: ObservableObject {
     private var failedWrites: [Error] = []
     /// Bumped by every local change: a fetch that started before one is stale and gets dropped.
     private var editGeneration = 0
+    /// Bumped whenever a write finishes: a fetch that overlapped one may predate it, so it's dropped too.
+    private var finishedWrites = 0
     /// Local placeholder id → id Google assigned (tasks and lists created here).
     private var aliases: [String: String] = [:]
     /// Google's id → the placeholder the UI has known the task by.
@@ -170,10 +172,10 @@ final class TaskStore: ObservableObject {
         defer { isSyncing = false }
         let started = session
         do {
-            let generation = editGeneration
+            let stamp = freshnessStamp()
             let fetched = try await api.lists()
             guard session == started else { return }
-            if generation == editGeneration, pendingWrites == 0 {
+            if isFresh(stamp) {
                 applyLists(fetched)
             }
             for list in lists where !list.id.hasPrefix("local-") {
@@ -199,10 +201,10 @@ final class TaskStore: ObservableObject {
     /// for the reconcile that follows the write queue).
     private func reloadTasks(_ listID: String) async throws {
         let started = session
-        let generation = editGeneration
+        let stamp = freshnessStamp()
         let fetched = try await api.tasks(in: listID)
         guard session == started else { return }
-        guard generation == editGeneration, pendingWrites == 0 else {
+        guard isFresh(stamp) else {
             touchedLists.insert(listID)
             return
         }
@@ -266,6 +268,8 @@ final class TaskStore: ObservableObject {
         let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty, let listID = (listID ?? selectedListID ?? lists.first?.id).map(key) else { return }
         let parent = parent.map { current($0, in: listID) }
+        // One level of subtasks only.
+        guard parent?.parent == nil else { return }
         let due = dueToday ? TaskItem.dueString(for: Date()) : nil
         let previous = parent.flatMap { p in openRows(in: listID).last { $0.task.parent == p.id }?.task }
         let localID = "local-" + UUID().uuidString
@@ -298,8 +302,10 @@ final class TaskStore: ObservableObject {
         }
         let fields: [String: Any] = completed ? ["status": "completed"] : ["status": "needsAction", "completed": NSNull()]
         enqueue(listID) { [self] in
+            let list = try remote(listID)
             for id in affected {
-                _ = try await api.patchTask(in: remote(listID), id: remote(id), fields: fields)
+                guard let id = try? remote(id) else { continue }
+                _ = try await api.patchTask(in: list, id: id, fields: fields)
             }
         }
     }
@@ -339,7 +345,11 @@ final class TaskStore: ObservableObject {
         let children = (tasks[listID] ?? []).filter { $0.parent == task.id }.map(\.id)
         change(listID) { $0.removeAll { $0.id == task.id || children.contains($0.id) } }
         enqueue(listID) { [self] in
-            for id in children + [task.id] { try await api.deleteTask(in: remote(listID), id: remote(id)) }
+            let list = try remote(listID)
+            for id in children + [task.id] {
+                guard let id = try? remote(id) else { continue }
+                try await api.deleteTask(in: list, id: id)
+            }
         }
     }
 
@@ -354,7 +364,11 @@ final class TaskStore: ObservableObject {
         guard !ids.isEmpty else { return }
         change(listID) { $0.removeAll { ids.contains($0.id) } }
         enqueue(listID) { [self] in
-            for id in ids { try await api.deleteTask(in: remote(listID), id: remote(id)) }
+            let list = try remote(listID)
+            for id in ids {
+                guard let id = try? remote(id) else { continue }
+                try await api.deleteTask(in: list, id: id)
+            }
         }
         messages.send(ids.count == 1 ? "Deleted 1 completed task" : "Deleted \(ids.count) completed tasks")
     }
@@ -451,8 +465,7 @@ final class TaskStore: ObservableObject {
             var previous: String?
             var failure: Error?
             for child in children {
-                let id = try remote(child.id)
-                guard left.contains(id) else { continue }
+                guard let id = try? remote(child.id), left.contains(id) else { continue }
                 do {
                     if child.isCompleted {
                         _ = try await api.moveTask(in: source, id: id, parent: nil, previous: nil, toList: dest)
@@ -521,7 +534,10 @@ final class TaskStore: ObservableObject {
         aliases[localID] = realID
         if let i = lists.firstIndex(where: { $0.id == localID }) { lists[i].id = realID }
         tasks[realID] = tasks.removeValue(forKey: localID) ?? []
-        if selectedListID == localID { selectedListID = realID }
+        if selectedListID == localID {
+            selectedListID = realID
+            defaults.set(realID, forKey: "selectedList")
+        }
         if touchedLists.remove(localID) != nil { touchedLists.insert(realID) }
     }
 
@@ -552,6 +568,17 @@ final class TaskStore: ObservableObject {
     }
 
     // MARK: Plumbing
+
+    private struct FreshnessStamp: Equatable {
+        var edits: Int
+        var writes: Int
+    }
+
+    private func freshnessStamp() -> FreshnessStamp { FreshnessStamp(edits: editGeneration, writes: finishedWrites) }
+
+    /// A fetch result can replace local state only if nothing was edited, written or still being written
+    /// while it was on its way.
+    private func isFresh(_ stamp: FreshnessStamp) -> Bool { stamp == freshnessStamp() && pendingWrites == 0 }
 
     /// Thrown for an edit whose task or list never made it to Google (its creation failed): nothing to send.
     private struct NotCreated: Error {}
@@ -599,6 +626,7 @@ final class TaskStore: ObservableObject {
                     if self.session == started, !Self.isSilent(error) { self.failedWrites.append(error) }
                 }
             }
+            self.finishedWrites += 1
             self.pendingWrites -= 1
             if self.pendingWrites == 0, self.session == started { self.writesDrained() }
         }
@@ -640,10 +668,10 @@ final class TaskStore: ObservableObject {
         touchedLists = []
         let started = session
         do {
-            let generation = editGeneration
+            let stamp = freshnessStamp()
             let fetched = try await api.lists()
             guard session == started else { return }
-            guard generation == editGeneration, pendingWrites == 0 else {
+            guard isFresh(stamp) else {
                 // Edited meanwhile: that edit's own drain reconciles these too.
                 touchedLists.formUnion(touched)
                 return

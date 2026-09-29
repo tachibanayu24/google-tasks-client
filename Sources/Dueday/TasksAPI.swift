@@ -1,6 +1,6 @@
 import Foundation
 
-struct TaskList: Codable, Identifiable, Equatable {
+struct TaskList: Codable, Identifiable, Hashable {
     var id: String
     var title: String
 }
