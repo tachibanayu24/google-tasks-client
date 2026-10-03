@@ -116,6 +116,8 @@ final class PanelController: NSObject, NSWindowDelegate {
     }
 
     private func configureStatusItem() {
+        // Named, so macOS remembers where the user ⌘-drags it, across launches and updates.
+        statusItem.autosaveName = "Tasks"
         guard let button = statusItem.button else { return }
         button.target = self
         button.action = #selector(statusItemClicked(_:))

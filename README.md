@@ -133,6 +133,12 @@ Each build is signed anew, so macOS asks once whether the new build may read the
 </details>
 
 <details>
+<summary><strong>The menu bar item is missing</strong></summary>
+
+On a Mac with a notch, items that don't fit in a crowded menu bar hide behind it. Make room by turning off items you don't need in System Settings → Menu Bar, then ⌘-drag the item where you like; the app remembers the spot. A global shortcut (Settings) opens the panel even while the item is hidden.
+</details>
+
+<details>
 <summary><strong>The count differs from what I see in Google Tasks</strong></summary>
 
 The menu bar counts open tasks **with a date of today or earlier**, in all lists. Tasks without a date aren't counted.
