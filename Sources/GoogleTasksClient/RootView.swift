@@ -22,21 +22,19 @@ struct RootView: View {
 
 private struct MainView: View {
     @ObservedObject var store: TaskStore
-    /// One banner at a time at the bottom of the panel: naming a list, or confirming a deletion.
+    /// The banner at the bottom of the panel for naming a list.
     @State private var banner: Banner?
 
     private enum Banner: Hashable {
         case create
         case rename(TaskList)
-        case delete(TaskList)
     }
 
     var body: some View {
         VStack(spacing: 0) {
             ListTabBar(store: store,
                        onCreateList: { show(.create) },
-                       onRenameList: { show(.rename($0)) },
-                       onDeleteList: { show(.delete($0)) })
+                       onRenameList: { show(.rename($0)) })
                 .frame(height: 44)
             if let listID = store.selectedListID {
                 AddTaskField(store: store)
@@ -79,13 +77,6 @@ private struct MainView: View {
                 store.renameList(list, to: name)
                 show(nil)
             }, onCancel: { show(nil) })
-        case .delete(let list):
-            ConfirmBanner(message: "Delete “\(list.title)” and all its tasks?", action: "Delete",
-                          onConfirm: {
-                              store.deleteList(list)
-                              show(nil)
-                          },
-                          onCancel: { show(nil) })
         }
     }
 
@@ -127,27 +118,6 @@ struct AddTaskField: View {
         .contentShape(Capsule())
         .onTapGesture { focused = true }
         .onReceive(store.focusAddField) { focused = true }
-    }
-}
-
-struct ConfirmBanner: View {
-    let message: String
-    let action: String
-    let onConfirm: () -> Void
-    let onCancel: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(message).font(.system(size: 13, weight: .medium))
-            HStack {
-                Spacer()
-                Button("Cancel", action: onCancel).keyboardShortcut(.cancelAction)
-                Button(action, role: .destructive, action: onConfirm).keyboardShortcut(.defaultAction)
-            }
-            .controlSize(.regular)
-        }
-        .padding(14)
-        .glassEffect(.regular, in: .rect(cornerRadius: 18))
     }
 }
 

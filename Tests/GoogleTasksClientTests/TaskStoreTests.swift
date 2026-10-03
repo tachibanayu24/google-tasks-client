@@ -93,51 +93,23 @@ import Testing
         #expect(google.task(titled: "Pay rent")?.due == nil)
     }
 
-    // MARK: Moving
+    // MARK: Order
 
-    @Test func draggingReordersTopLevelTasksWithTheirSubtasks() async {
-        let a = google.seedTask("A", in: inbox)
-        google.seedTask("A1", in: inbox, parent: a)
-        google.seedTask("B", in: inbox)
-        google.seedTask("C", in: inbox)
+    @Test func listsAreSortedBySoonestDueDateWithUndatedLast() async {
+        let day = { (offset: Int) in TaskItem.dueString(for: Calendar.current.date(byAdding: .day, value: offset, to: Date())!) }
+        google.seedTask("Undated", in: inbox)
+        google.seedTask("Next week", in: inbox, due: day(7))
+        let parent = google.seedTask("Today", in: inbox, due: day(0))
+        google.seedTask("Child later", in: inbox, parent: parent, due: day(3))
+        google.seedTask("Child sooner", in: inbox, parent: parent, due: day(1))
+        google.seedTask("Overdue", in: inbox, due: day(-2))
+        google.seedTask("Also today", in: inbox, due: day(0))
         let store = await makeStore()
-        // Rows: A, A1, B, C. Drag A to the end.
-        store.move(from: [0], to: 4)
-        #expect(titles(store, inbox) == ["B", "C", "A", "  A1"])
-        await store.settle()
-        #expect(google.outline(inbox) == ["B", "C", "A", "  A1"])
+        // Same day keeps Google's order (seeded order here); subtasks stay under their parent.
+        #expect(titles(store, inbox) == ["Overdue", "Today", "  Child sooner", "  Child later", "Also today", "Next week", "Undated"])
     }
 
-    @Test func draggingASubtaskUnderAnotherTask() async {
-        let a = google.seedTask("A", in: inbox)
-        google.seedTask("A1", in: inbox, parent: a)
-        google.seedTask("B", in: inbox)
-        let store = await makeStore()
-        // Rows: A, A1, B. Drop A1 below B: it becomes B's subtask.
-        store.move(from: [1], to: 3)
-        await store.settle()
-        #expect(google.outline(inbox) == ["A", "B", "  A1"])
-        #expect(titles(store, inbox) == ["A", "B", "  A1"])
-    }
-
-    @Test func draggingASubtaskToTheTopMakesItATask() async {
-        let a = google.seedTask("A", in: inbox)
-        google.seedTask("A1", in: inbox, parent: a)
-        let store = await makeStore()
-        store.move(from: [1], to: 0)
-        await store.settle()
-        #expect(google.outline(inbox) == ["A1", "A"])
-    }
-
-    @Test func droppingInPlaceSendsNothing() async {
-        google.seedTask("A", in: inbox)
-        google.seedTask("B", in: inbox)
-        let store = await makeStore()
-        store.move(from: [1], to: 2)
-        store.move(from: [0], to: 1)
-        await store.settle()
-        #expect(!google.calls.contains("moveTask"))
-    }
+    // MARK: Nesting and moving
 
     @Test func indentAndOutdent() async {
         google.seedTask("A", in: inbox)
@@ -151,6 +123,16 @@ import Testing
         store.outdent(row(store, "B"))
         await store.settle()
         #expect(google.outline(inbox) == ["A", "B"])
+    }
+
+    @Test func orphanedSubtasksAreNeverNestedUnder() async {
+        let done = google.seedTask("Done parent", in: inbox, completed: true)
+        google.seedTask("Orphan", in: inbox, parent: done)
+        google.seedTask("B", in: inbox)
+        let store = await makeStore()
+        // The orphan (open subtask of a completed task) shows at the top level, but it can't take subtasks.
+        #expect(titles(store, inbox) == ["Orphan", "B"])
+        #expect(!store.canIndent(row(store, "B")))
     }
 
     @Test func aTaskWithOnlyCompletedSubtasksCantBeIndented() async {
@@ -179,24 +161,6 @@ import Testing
         #expect(titles(store, work).prefix(2) == ["A", "  Open child"])
     }
 
-    @Test func orphanedSubtasksAreNeverUsedAsTopLevelNeighbours() async {
-        let done = google.seedTask("Done parent", in: inbox, completed: true)
-        google.seedTask("Orphan", in: inbox, parent: done)
-        google.seedTask("B", in: inbox)
-        let store = await makeStore()
-        // The orphan (open subtask of a completed task) shows at the top level.
-        #expect(titles(store, inbox) == ["Orphan", "B"])
-        // B dropped below the orphan has no real top-level task above it: nothing to tell Google.
-        store.move(from: [1], to: 2)
-        await store.settle()
-        #expect(!google.calls.contains("moveTask"))
-        // The orphan dropped below B becomes a real top-level task after B.
-        store.move(from: [0], to: 2)
-        await store.settle()
-        #expect(google.outline(inbox) == ["Done parent ✓", "B", "Orphan"])
-        #expect(store.syncProblem == nil)
-    }
-
     // MARK: Deleting
 
     @Test func deletingATaskDeletesItsSubtasks() async {
@@ -207,18 +171,6 @@ import Testing
         await store.settle()
         #expect(google.outline(inbox).isEmpty)
         #expect(google.task(titled: "A1") == nil)
-    }
-
-    @Test func deleteCompletedSparesParentsOfOpenSubtasks() async {
-        google.seedTask("Done", in: inbox, completed: true)
-        let parent = google.seedTask("Done parent", in: inbox, completed: true)
-        google.seedTask("Still open", in: inbox, parent: parent)
-        let store = await makeStore()
-        store.deleteCompleted()
-        await store.settle()
-        #expect(google.task(titled: "Done") == nil)
-        #expect(google.task(titled: "Done parent") != nil)
-        #expect(google.task(titled: "Still open") != nil)
     }
 
     // MARK: Lists
@@ -238,15 +190,11 @@ import Testing
         #expect(titles(store, localID) == ["Eggs", "Milk"])
     }
 
-    @Test func renameAndDeleteList() async {
+    @Test func renameList() async {
         let store = await makeStore()
         store.renameList(store.lists.first { $0.id == work }!, to: "Office")
         await store.settle()
         #expect(google.lists.first { $0.id == work }?.title == "Office")
-        store.deleteList(store.lists.first { $0.id == work }!)
-        await store.settle()
-        #expect(!google.lists.contains { $0.id == work })
-        #expect(!store.lists.contains { $0.id == work })
     }
 
     @Test func subtasksCantBeAddedUnderSubtasks() async {

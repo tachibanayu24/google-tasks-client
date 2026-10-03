@@ -115,12 +115,15 @@ final class TaskStore: ObservableObject {
 
     func rowID(_ task: TaskItem) -> String { rowIDs[task.id] ?? task.id }
 
-    /// Open tasks in display order: each top-level task followed by its open subtasks.
+    /// Open tasks in display order: soonest due first (undated last), each top-level task followed by its
+    /// open subtasks. Tasks due the same day keep Google's order.
     func openRows(in listID: String) -> [Row] {
         let open = (tasks[key(listID)] ?? []).enumerated().filter { !$0.element.isCompleted }
         let ids = Set(open.map(\.element.id))
         func sorted(_ items: [(offset: Int, element: TaskItem)]) -> [TaskItem] {
             items.sorted { a, b in
+                let da = a.element.dueDate ?? .distantFuture, db = b.element.dueDate ?? .distantFuture
+                if da != db { return da < db }
                 let pa = a.element.position ?? "", pb = b.element.position ?? ""
                 return pa == pb ? a.offset < b.offset : pa < pb
             }
@@ -353,59 +356,7 @@ final class TaskStore: ObservableObject {
         }
     }
 
-    /// Deletes the selected list's completed tasks — except completed parents that still have open subtasks,
-    /// which Google could take down with them.
-    func deleteCompleted() {
-        guard let listID = selectedListID else { return }
-        let items = tasks[listID] ?? []
-        let ids = items.filter { task in
-            task.isCompleted && !items.contains { $0.parent == task.id && !$0.isCompleted }
-        }.map(\.id)
-        guard !ids.isEmpty else { return }
-        change(listID) { $0.removeAll { ids.contains($0.id) } }
-        enqueue(listID) { [self] in
-            let list = try remote(listID)
-            for id in ids {
-                guard let id = try? remote(id) else { continue }
-                try await api.deleteTask(in: list, id: id)
-            }
-        }
-        messages.send(ids.count == 1 ? "Deleted 1 completed task" : "Deleted \(ids.count) completed tasks")
-    }
-
-    // MARK: Moving
-
-    /// Drag and drop in the open list. Top-level tasks move among top-level tasks (their subtasks come
-    /// along); a subtask lands under the task above the drop point.
-    func move(from source: IndexSet, to destination: Int) {
-        guard let listID = selectedListID, let from = source.first else { return }
-        let rows = openRows(in: listID)
-        guard rows.indices.contains(from) else { return }
-        let moving = rows[from]
-        // Rows above the drop point, without the moved task (and its subtasks).
-        let above = rows.prefix(destination).filter { $0.task.id != moving.task.id && $0.task.parent != moving.task.id }
-        let nestUnder = above.last.flatMap { target -> TaskItem? in
-            guard moving.depth == 1 else { return nil }
-            if target.depth == 1 { return rows.first { $0.task.id == target.task.parent }?.task }
-            return target.task.parent == nil ? target.task : nil
-        }
-
-        if let parent = nestUnder {
-            let previous = above.last.flatMap { $0.depth == 1 ? $0.task : nil }
-            let current = previousSibling(of: moving.task, rows: rows)
-            guard parent.id != moving.task.parent || previous?.id != current?.id else { return }
-            place(moving.task, parent: parent, after: previous, in: listID)
-        } else {
-            // Among top-level tasks, only real ones can be `previous` (not subtasks shown at the top level
-            // because their parent is completed).
-            let previous = above.reversed().lazy.compactMap { row -> TaskItem? in
-                if row.depth == 1 { return rows.first { $0.task.id == row.task.parent }?.task }
-                return row.task.parent == nil ? row.task : nil
-            }.first
-            if moving.task.parent == nil, previous?.id == topLevelBefore(moving.task, rows: rows)?.id { return }
-            place(moving.task, parent: nil, after: previous, in: listID)
-        }
-    }
+    // MARK: Nesting and moving
 
     func canIndent(_ task: TaskItem) -> Bool {
         guard let listID = selectedListID else { return false }
@@ -508,12 +459,6 @@ final class TaskStore: ObservableObject {
         return rows[..<index].last { $0.depth == 0 && $0.task.parent == nil }?.task
     }
 
-    private func previousSibling(of task: TaskItem, rows: [Row]) -> TaskItem? {
-        let siblings = rows.filter { $0.task.parent == task.parent && $0.depth == 1 }
-        guard let i = siblings.firstIndex(where: { $0.task.id == task.id }), i > 0 else { return nil }
-        return siblings[i - 1].task
-    }
-
     // MARK: List edits
 
     func createList(title: String) {
@@ -548,23 +493,6 @@ final class TaskStore: ObservableObject {
         lists[i].title = title
         editGeneration += 1
         enqueue(nil) { [self] in try await api.renameList(remote(id), title: title) }
-    }
-
-    func deleteList(_ list: TaskList) {
-        let id = key(list.id)
-        guard lists.count > 1, let i = lists.firstIndex(where: { $0.id == id }) else {
-            messages.send("Can’t delete the only list")
-            return
-        }
-        lists.remove(at: i)
-        tasks[id] = nil
-        if selectedListID == id {
-            let neighbor = lists[max(0, i - 1)].id
-            if showingToday { selectedListID = neighbor } else { select(listID: neighbor) }
-        }
-        editGeneration += 1
-        enqueue(nil) { [self] in try await api.deleteList(remote(id)) }
-        messages.send("Deleted “\(list.title)”")
     }
 
     // MARK: Plumbing

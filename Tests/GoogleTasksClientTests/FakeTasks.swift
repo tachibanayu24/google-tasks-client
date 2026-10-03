@@ -96,13 +96,6 @@ final class FakeTasks: TasksService {
         lists[i].title = title
     }
 
-    func deleteList(_ id: String) async throws {
-        try check("deleteList")
-        guard lists.contains(where: { $0.id == id }) else { throw FakeError(message: "404 list") }
-        lists.removeAll { $0.id == id }
-        tasks = tasks.filter { $0.value.list != id }
-    }
-
     func tasks(in list: String) async throws -> [TaskItem] {
         try check("tasks")
         guard lists.contains(where: { $0.id == list }) else { throw FakeError(message: "404 list") }

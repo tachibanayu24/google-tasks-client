@@ -6,7 +6,7 @@
 //   shoot --states <out.png>
 //       Draws the menu bar item's three states, on a dark and a light menu bar.
 //
-// Everything is drawn at twice the usual size, to match the zoomed panel.
+// Sizes below are in pixels of the final image (two per point of the panel), on 1x and Retina displays alike.
 import AppKit
 
 func color(_ hex: UInt32, _ alpha: CGFloat = 1) -> NSColor {
@@ -85,7 +85,9 @@ func drawMenuBar(in bounds: NSRect, dark: Bool, state: [String], itemX: CGFloat)
     bar.fill()
     let ink = dark ? NSColor.white : NSColor(white: 0.08, alpha: 1)
     var x = bounds.width - 28
-    let clock = NSAttributedString(string: "Wed Sep 30  9:41", attributes: [
+    // Today's date, to match the panel's Today header; the time is the classic 9:41.
+    let date = Date().formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day().locale(Locale(identifier: "en_US")))
+    let clock = NSAttributedString(string: date.replacingOccurrences(of: ",", with: "") + "  9:41", attributes: [
         .font: NSFont.systemFont(ofSize: 26, weight: .medium), .foregroundColor: ink,
     ])
     x -= clock.size().width
@@ -141,9 +143,15 @@ final class Backdrop: NSView {
     required init?(coder: NSCoder) { fatalError() }
 
     override func draw(_ dirtyRect: NSRect) {
-        drawWallpaper(in: bounds, dark: dark)
+        // Draw in pixels: on Retina a point is two of them.
+        let scale = window?.backingScaleFactor ?? 1
+        let transform = NSAffineTransform()
+        transform.scale(by: 1 / scale)
+        transform.concat()
+        let pixels = NSRect(x: 0, y: 0, width: bounds.width * scale, height: bounds.height * scale)
+        drawWallpaper(in: pixels, dark: dark)
         // The item centred over the panel, as when the panel hangs from it.
-        drawMenuBar(in: bounds, dark: dark, state: state, itemX: bounds.midX)
+        drawMenuBar(in: pixels, dark: dark, state: state, itemX: pixels.midX)
     }
 }
 
@@ -159,9 +167,11 @@ func photographPanel(to output: String, dark: Bool, state: [String]) {
         print("no panel on screen")
         exit(1)
     }
-    // Margins: wallpaper to the sides and below, the drawn menu bar (48) plus a gap (12) above.
-    let capture = CGRect(x: panelBounds.minX - 440, y: panelBounds.minY - 60, width: panelBounds.width + 880,
-                         height: panelBounds.height + 60 + 80)
+    // Margins (in pixels, converted to points): wallpaper to the sides and below, the drawn menu bar (48)
+    // plus a gap (12) above.
+    let scale = NSScreen.screens[0].backingScaleFactor
+    let capture = CGRect(x: panelBounds.minX - 440 / scale, y: panelBounds.minY - 60 / scale,
+                         width: panelBounds.width + 880 / scale, height: panelBounds.height + 140 / scale)
     let screenHeight = NSScreen.screens[0].frame.height
     let region = NSRect(x: capture.minX, y: screenHeight - capture.maxY, width: capture.width, height: capture.height)
 

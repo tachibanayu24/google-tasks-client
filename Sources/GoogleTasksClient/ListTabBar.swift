@@ -7,7 +7,6 @@ struct ListTabBar: View {
     @ObservedObject var store: TaskStore
     var onCreateList: () -> Void
     var onRenameList: (TaskList) -> Void
-    var onDeleteList: (TaskList) -> Void
     @Namespace private var selection
 
     var body: some View {
@@ -26,7 +25,6 @@ struct ListTabBar: View {
                                     .onTapGesture { withAnimation(.bouncy(duration: 0.35)) { store.select(listID: list.id) } }
                                     .contextMenu {
                                         Button("Rename…") { onRenameList(list) }
-                                        Button("Delete List…", role: .destructive) { onDeleteList(list) }
                                     }
                             }
                         }
@@ -55,7 +53,7 @@ struct ListTabBar: View {
             .foregroundStyle(.secondary)
             .help("New List")
 
-            ListMenu(store: store, onDeleteList: onDeleteList, onRename: onRenameList)
+            ListMenu(store: store, onRename: onRenameList)
         }
         .padding(.leading, 10)
         .padding(.trailing, 8)
@@ -66,7 +64,6 @@ struct ListTabBar: View {
 
 private struct ListMenu: View {
     @ObservedObject var store: TaskStore
-    var onDeleteList: (TaskList) -> Void
     var onRename: (TaskList) -> Void
 
     var body: some View {
@@ -79,9 +76,6 @@ private struct ListMenu: View {
             if let list = store.selectedList, !store.showingToday {
                 Divider()
                 Button("Rename List…") { onRename(list) }
-                Button("Delete Completed Tasks") { store.deleteCompleted() }
-                    .disabled(store.completedTasks(in: list.id).isEmpty)
-                Button("Delete List…", role: .destructive) { onDeleteList(list) }
             }
             Divider()
             Button("Open Google Tasks") { NSWorkspace.shared.open(URL(string: "https://tasks.google.com/")!) }

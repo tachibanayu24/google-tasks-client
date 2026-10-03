@@ -14,7 +14,6 @@ struct TaskListView: View {
                 TaskRow(store: store, task: row.task, depth: row.depth, listID: listID)
                     .modifier(RowChrome())
             }
-            .onMove { store.move(from: $0, to: $1) }
 
             if rows.isEmpty && store.tasks[listID] != nil {
                 EmptyState(hasCompleted: !completed.isEmpty)

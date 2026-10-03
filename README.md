@@ -30,7 +30,7 @@
   <img src="docs/menubar.png" width="360" alt="The menu bar item: a progress ring with the count, a check mark, and a party popper">
 
 - **Today, across lists.** Open it for one view of what's overdue, what's due today and what you've already done. Postpone to tomorrow with a right-click.
-- **Every list, too.** Each list is a tab. Add, edit and complete tasks. Drag to reorder, nest subtasks, set dates, write notes, move tasks between lists, and create or rename lists.
+- **Every list, too.** Each list is a tab, soonest due first. Add, edit and complete tasks. Nest subtasks, set dates, write notes, move tasks between lists, and create or rename lists. Deleting lists and clearing completed tasks are left to Google Tasks, so nothing irreversible is one stray click away.
 - **Instant.** Edits show immediately and sync in the background, in order. Changes made elsewhere arrive within half a minute while the panel is open, and within five minutes in the menu bar.
 - **Liquid Glass**, in light and dark, from crystal clear to tinted.
 - **Your keys, your data.** It talks to Google directly with an OAuth client you create. There's no server in between and no telemetry.
@@ -92,7 +92,7 @@ The app ships without any Google credentials. You use your own OAuth client, whi
 - Click the title to rename it.
 - Click the row for notes, the date and more actions.
 - Right-click for subtasks, *Move to* another list, *Postpone to Tomorrow*, *Open in Google Tasks* and *Delete*.
-- Drag to reorder. Dragging a subtask under another task moves it there, and *Make Subtask* nests a task under the one above it.
+- *Make Subtask* nests a task under the one above it, and *Move Out of Subtask* lifts it back.
 
 **Settings:** your account, an optional global shortcut, theme, opacity, text size and launch at login.
 
@@ -178,7 +178,7 @@ The dev app never takes the keyboard on its own. It can be driven with distribut
 | `GoogleTasksClientDev.next` | Next tab |
 | `GoogleTasksClientDev.finish` | Complete everything due today (to see the celebration) |
 | `GoogleTasksClientDev.settings` | Open Settings |
-| `GoogleTasksClientDev.zoom` | Show the panel at twice its size, for Retina-quality captures on any display |
+| `GoogleTasksClientDev.zoom` | Ready the panel for a documentation capture (on a 1x display: shown at twice its size, so the images are Retina-quality anywhere) |
 
 Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md).
 

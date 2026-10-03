@@ -83,7 +83,6 @@ protocol TasksService {
     func lists() async throws -> [TaskList]
     func createList(title: String) async throws -> TaskList
     func renameList(_ id: String, title: String) async throws
-    func deleteList(_ id: String) async throws
     func tasks(in list: String) async throws -> [TaskItem]
     func insertTask(in list: String, fields: [String: Any], parent: String?, previous: String?) async throws -> TaskItem
     func patchTask(in list: String, id: String, fields: [String: Any]) async throws -> TaskItem
@@ -114,10 +113,6 @@ struct TasksAPI: TasksService {
 
     func renameList(_ id: String, title: String) async throws {
         _ = try await send("PATCH", "users/@me/lists/\(id.pathEscaped)", body: ["title": title])
-    }
-
-    func deleteList(_ id: String) async throws {
-        _ = try await send("DELETE", "users/@me/lists/\(id.pathEscaped)")
     }
 
     // MARK: Tasks

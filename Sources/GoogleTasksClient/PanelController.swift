@@ -325,22 +325,24 @@ final class PanelController: NSObject, NSWindowDelegate {
         outsideClickMonitor = nil
     }
 
-    /// Dev builds only: shows the panel at twice its size with everything drawn 2x, so a 1x display can
-    /// capture Retina-quality documentation images.
+    /// Dev builds only: readies the panel for a documentation capture (scripts/docs) at two pixels per point.
+    /// On a 1x display the panel is shown at twice its size with everything drawn 2x; on Retina it is only
+    /// moved, leaving room above for the drawn menu bar.
     func zoomForCapture() {
         guard let root = panel.contentView else { return }
         isCapturing = true
         removeOutsideClickMonitor()
+        let zoom = max(1, 2 / panel.backingScaleFactor)
         let frame = panel.frame
-        // Room above for the drawn menu bar of the documentation backdrop (scripts/docs).
         let screen = panel.screen?.frame ?? .zero
-        panel.setFrame(NSRect(x: screen.midX - frame.width, y: screen.maxY - 140 - frame.height * 2,
-                              width: frame.width * 2, height: frame.height * 2), display: true)
-        root.layer?.cornerRadius = cornerRadius * 2
+        panel.setFrame(NSRect(x: screen.midX - frame.width * zoom / 2, y: screen.maxY - 140 / panel.backingScaleFactor - frame.height * zoom,
+                              width: frame.width * zoom, height: frame.height * zoom), display: true)
+        guard zoom > 1 else { return }
+        root.layer?.cornerRadius = cornerRadius * zoom
         for view in root.subviews {
-            if let glass = view as? NSGlassEffectView { glass.cornerRadius = cornerRadius * 2 }
+            if let glass = view as? NSGlassEffectView { glass.cornerRadius = cornerRadius * zoom }
             guard view is NSHostingView<RootView> else { continue }
-            // The content keeps its 1x layout inside a container whose coordinates are scaled by two.
+            // The content keeps its 1x layout inside a container whose coordinates are scaled up.
             let container = NSView(frame: root.bounds)
             container.autoresizingMask = [.width, .height]
             root.replaceSubview(view, with: container)
